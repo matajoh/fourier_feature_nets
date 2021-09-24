@@ -1,8 +1,8 @@
 import argparse
+from nerf2d.models import PositionalNeRF2d
 
 import cv2
-from torch.functional import Tensor
-from nerf2d import BasicNerf2d
+from nerf2d import PositionalNeRF2d
 import numpy as np
 import torch
 import torch.optim
@@ -11,8 +11,10 @@ import torch.optim
 def _main():
     print("Creating dataset...")
     pixels = cv2.imread("D:\\Temp\\imogen.jpg")
-    pixels = cv2.cvtColor(pixels, cv2.COLOR_BGR2YCrCb) / 255
+    frame = np.zeros((512, 1024, 3), np.uint8)
+    frame[:, :512] = pixels
 
+    pixels = cv2.cvtColor(pixels, cv2.COLOR_BGR2YCrCb) / 255
     train_uv = []
     train_color = []
     val_uv = []
@@ -32,7 +34,7 @@ def _main():
     train_color = torch.FloatTensor(train_color).to("cuda")
     val_uv = torch.FloatTensor(val_uv).to("cuda")
     val_color = torch.FloatTensor(val_color).to("cuda")
-    model = BasicNerf2d().to("cuda")
+    model = PositionalNeRF2d().to("cuda")
 
     optim = torch.optim.Adam(model.parameters(), 1e-3)
     for step in range(2000):
@@ -40,8 +42,8 @@ def _main():
             with torch.no_grad():
                 output = model(val_uv)
                 pixels = (output * 255).reshape(512, 512, 3).cpu().numpy().astype(np.uint8)
-                pixels = cv2.cvtColor(pixels, cv2.COLOR_YCrCb2BGR)
-                cv2.imshow("progress", pixels)
+                frame[:, 512:] = cv2.cvtColor(pixels, cv2.COLOR_YCrCb2BGR)
+                cv2.imshow("progress", frame)
                 cv2.waitKey(1)
                 val_loss = torch.square(output - val_color).sum()
 
@@ -56,12 +58,12 @@ def _main():
     with torch.no_grad():
         output = model(val_uv)
         pixels = (output * 255).reshape(512, 512, 3).cpu().numpy().astype(np.uint8)
-        pixels = cv2.cvtColor(pixels, cv2.COLOR_YCrCb2BGR)
-        cv2.imshow("progress", pixels)
-        cv2.waitKey()
+        frame[:, 512:] = cv2.cvtColor(pixels, cv2.COLOR_YCrCb2BGR)
         val_loss = torch.square(output - val_color).sum()
+        print("final", val_loss.item())
+        cv2.imshow("progress", frame)
+        cv2.waitKey()
 
-    print("final", val_loss.item())
 
 
 if __name__ == "__main__":
