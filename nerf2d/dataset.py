@@ -31,7 +31,7 @@ class PixelDataset:
         
         if pixels.shape[0] != size:
             sigma = pixels.shape[0] / size
-            pixels = cv2.GaussianBlur(pixels, [0, 0], sigma)
+            pixels = cv2.GaussianBlur(pixels, (0, 0), sigma)
             pixels = cv2.resize(pixels, (size, size), cv2.INTER_NEAREST)
 
         if color_space == "YCrCb":
