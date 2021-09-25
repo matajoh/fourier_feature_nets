@@ -1,11 +1,21 @@
 import argparse
-from nerf2d.models import PositionalNeRF2d
 
 import cv2
-from nerf2d import PositionalNeRF2d
+from nerf2d import GaussianNeRF2d
 import numpy as np
 import torch
 import torch.optim
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser("NeRF2D Image Trainer")
+    parser.add_argument("image_path", help="Path to an image file")
+    parser.add_argument("nerf_model", choices=["raw", "basic", "positional", "gaussian"])
+    parser.add_argument("--color-space", choices=["YCrCb", "RGB"])
+    parser.add_argument("--num-channels", type=int, default=256, help="Number of channels in the MLP")
+    parser.add_argument("--num-frequences", type=int, default=256, help="Number of frequencies used for encoding")
+    parser.add_argument("--pos-sigma", type=float, default=6, help="Value of sigma for the positional model")
+    parser.add_argument("--gauss-sigma", type=float, default=10, help="Value of sigma for the gaussian model")
 
 
 def _main():
@@ -34,7 +44,7 @@ def _main():
     train_color = torch.FloatTensor(train_color).to("cuda")
     val_uv = torch.FloatTensor(val_uv).to("cuda")
     val_color = torch.FloatTensor(val_color).to("cuda")
-    model = PositionalNeRF2d().to("cuda")
+    model = GaussianNeRF2d().to("cuda")
 
     optim = torch.optim.Adam(model.parameters(), 1e-3)
     for step in range(2000):
