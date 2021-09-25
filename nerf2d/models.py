@@ -29,7 +29,8 @@ class BasicNeRF2d(nn.Module):
         self.output = nn.Linear(num_channels, 3)
 
     def forward(self, uv: torch.Tensor) -> torch.Tensor:
-        encoded = torch.cat([(2 * math.pi * uv).cos(), (2 * math.pi * uv).sin()], dim=-1)
+        encoded = 2 * math.pi * uv
+        encoded = torch.cat([uv.cos(), uv.sin()], dim=-1)
         output = torch.relu(self.input(encoded))
         output = torch.relu(self.hidden0(output))
         output = torch.relu(self.hidden1(output))
