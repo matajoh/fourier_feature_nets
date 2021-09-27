@@ -1,19 +1,12 @@
-"""
-1. match each frame with the next frame
-2. use triangulation to find 3D position of matched points
-3. put points in KNN structure
-4. merge nearby points
-5. mesh em
-"""
+"""Script for preparing Intrinsic3d dataset for use with NeRF"""
 
+import argparse
 from collections import namedtuple
 import os
 
 import cv2
 import numpy as np
-from numpy.lib.arraysetops import unique
-from numpy.lib.twodim_base import tri
-from nerf2d import CameraInfo, Triangulation, triangulation
+from nerf2d import CameraInfo, Triangulation
 import svt
 
 
@@ -66,10 +59,9 @@ def _draw_matches(match_image, image0, image1, keypoints0, keypoints1, mask):
     match_image[:, :width] = image0
     match_image[:, width:] = image1
     mask = mask.reshape(-1)
-    keypoints0 = keypoints0[mask == 1].astype(np.int32).reshape(-1, 2) // 2
-    keypoints1 = keypoints1[mask == 1].astype(np.int32).reshape(-1, 2) // 2
+    keypoints0 = keypoints0[mask == 1].astype(np.int32).reshape(-1, 2)
+    keypoints1 = keypoints1[mask == 1].astype(np.int32).reshape(-1, 2)
     keypoints1 = keypoints1 + (width, 0)
-    lines = np.stack([keypoints0, keypoints1], -2)
     for kp0, kp1 in zip(keypoints0, keypoints1):
         pt0 = tuple(kp0)
         pt1 = tuple(kp1)
@@ -81,7 +73,14 @@ def _draw_matches(match_image, image0, image1, keypoints0, keypoints1, mask):
 PathPoint = namedtuple("PathPoint", ["frame", "position", "color"])
 
 
-def _extract_point_cloud():
+def _read_image_scaled(path):
+    image = cv2.imread(path)
+    image = cv2.GaussianBlur(image, (0, 0), 4)
+    image = cv2.resize(image, (320, 240), interpolation=cv2.INTER_NEAREST)
+    return image
+
+
+def _build_dataset():
     bf = cv2.BFMatcher()
 
     dataset_dir = "D:\\Data\\intrinsic3d\\tomb-statuary-rgbd"
@@ -90,10 +89,11 @@ def _extract_point_cloud():
     resolution = data["resolution"]
     points = []
     colors = []
-    image_path = os.path.join(dataset_dir, "frame-{:06}.color.png".format(0))
-    image0 = cv2.imread(image_path)
-    image0 = cv2.resize(image0, (image0.shape[1] // 2, image0.shape[0] // 2))
-    keypoints0 = data["keypoints{:04}".format(0)]
+    scale = 320 / resolution[0]
+    resolution = (320, 240)
+    intrinsics[:2] *= scale
+    image0 = _read_image_scaled(os.path.join(dataset_dir, "frame-{:06}.color.png".format(0)))
+    keypoints0 = data["keypoints{:04}".format(0)] * scale
     descriptors0 = data["descriptors{:04}".format(0)]
     extrinsics0 = data["pose{:04}".format(0)]
     colors0 = data["colors{:04}".format(0)]
@@ -104,16 +104,18 @@ def _extract_point_cloud():
     labels = np.arange(label_start, label_end)
     paths = {}
     cameras = [camera]
+    frames = [image0]
+    extrinsics = [extrinsics0]
     for frame in range(1, data["num_frames"]):
         print(frame)
-        image_path = os.path.join(dataset_dir, "frame-{:06}.color.png".format(frame))
-        image1 = cv2.imread(image_path)
-        image1 = cv2.resize(image1, (image1.shape[1] // 2, image1.shape[0] // 2))
-        keypoints1 = data["keypoints{:04}".format(frame)]
+        image1 = _read_image_scaled(os.path.join(dataset_dir, "frame-{:06}.color.png".format(frame)))
+        keypoints1 = data["keypoints{:04}".format(frame)] * scale
         descriptors1 = data["descriptors{:04}".format(frame)]
         extrinsics1 = data["pose{:04}".format(frame)]
         colors1 = data["colors{:04}".format(frame)]
         cameras.append(CameraInfo.create("cam1", resolution, intrinsics, extrinsics1))
+        extrinsics.append(extrinsics0)
+        frames.append(image1)
 
         matches = bf.knnMatch(descriptors0, descriptors1, k=2)
         # Apply ratio test
@@ -156,18 +158,16 @@ def _extract_point_cloud():
     cv2.destroyAllWindows()
 
     print("Triangulating points")
-    report_interval = len(paths) // 100
     size = np.array(resolution).astype(np.float32)
     points = []
     colors = []
-    min_path_length = 30
+    min_path_length = 40
     for ldmk_id in paths:
         path = paths[ldmk_id]
         if len(path) < min_path_length:
             continue
 
-        if len(points) % report_interval == 0:
-            print(len(points), "/", len(paths))
+        print(len(points))
 
         landmarks = np.stack([p.position for p in path])
         landmarks = (2 * (landmarks + 0.5)) / size - 1
@@ -182,40 +182,39 @@ def _extract_point_cloud():
         colors.append(path_colors.mean(0).astype(np.uint8))
 
     print("done")
-    np.savez("D:\\Data\\intrinsic3d\\tomb_statuary_cloud.npz", points=points, colors=colors)
+    np.savez("D:\\Data\\intrinsic3d\\tomb_statuary.npz",
+             points=points,
+             colors=colors,
+             frames=frames,
+             intrinsics=intrinsics,
+             extrinsics=extrinsics,
+             resolution=resolution)
 
 
-def _main():
-    #_extract_point_cloud()
-    dataset_dir = "D:\\Data\\intrinsic3d\\tomb-statuary-rgbd"
-    keypoints_data = np.load("D:\\Data\\intrinsic3d\\tomb_statuary_keypoints.npz")
-    data = np.load("D:\\Data\\intrinsic3d\\tomb_statuary_cloud.npz")
+def _create_svt():
+    data = np.load("D:\\Data\\intrinsic3d\\tomb_statuary.npz")
     points = data["points"]
     colors = data["colors"].astype(np.float32) / 255
-
-    intrinsics = keypoints_data["intrinsics"]
-    resolution = keypoints_data["resolution"]
+    frames = data["frames"]
+    intrinsics = data["intrinsics"]
+    extrinsics = data["extrinsics"]
+    resolution = data["resolution"]
 
     focus_point = points.mean(0)
 
     scene = svt.Scene()
-    canvas = scene.create_canvas_3d(width=resolution[0], height=resolution[1])
+    canvas = scene.create_canvas_3d(width=800, height=600)
     mesh = scene.create_mesh()
-    mesh.add_icosphere(color=svt.Colors.Magenta, transform=svt.Transforms.scale(0.005))
+    mesh.add_icosphere(color=svt.Colors.Magenta, transform=svt.Transforms.scale(0.01))
     mesh.enable_instancing(points, colors=colors[:, ::-1])
 
-    for i in range(keypoints_data["num_frames"]):
-        print(i, "/", keypoints_data["num_frames"])
-        image_path = os.path.join(dataset_dir, "frame-{:06}.color.png".format(i))
-        pixels = cv2.imread(image_path)
-        width = (pixels.shape[1] * 240 // pixels.shape[0])
-        height = 240
-        pixels = cv2.resize(pixels, (width, height), interpolation=cv2.INTER_AREA)
+    num_frames = frames.shape[0]
+    for i in range(num_frames):
+        print(i, "/", num_frames)
         image = scene.create_image()
-        image.from_numpy(pixels[:, :, ::-1])
+        image.from_numpy(frames[i, :, :, ::-1])
 
-        extrinsics = keypoints_data["pose{:04}".format(i)]
-        camera = CameraInfo.create("cam", resolution, intrinsics, extrinsics)
+        camera = CameraInfo.create("cam", resolution, intrinsics, extrinsics[i])
         svt_camera = camera.to_svt()
 
         frustum_mesh = scene.create_mesh(layer_id="frustums")
@@ -231,6 +230,13 @@ def _main():
         frame.add_mesh(image_mesh)
 
     scene.save_as_html("D:\\Data\\intrinsic3d\\tomb_statuary.html")
+
+
+def _main():
+    #_extract_keypoints()
+    _build_dataset()
+    _create_svt()
+
    
 
 if __name__ == "__main__":
