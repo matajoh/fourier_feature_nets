@@ -65,12 +65,26 @@ class PixelDataset:
         val_data = PixelData(self.val_uv.to(*args), self.val_color.to(*args))
         return PixelDataset(self.size, self.color_space, train_data, val_data)
 
-    def to_image(self, colors: torch.Tensor) -> np.ndarray:
-        pixels = (colors * 255).reshape(self.size, self.size, 3).cpu().numpy().astype(np.uint8)
+    def to_image(self, colors: torch.Tensor, size = 0) -> np.ndarray:
+        if size == 0:
+            size = self.size
+
+        pixels = (colors * 255).reshape(size, size, 3).cpu().numpy().astype(np.uint8)
         if self.color_space == "YCrCb":
             pixels = cv2.cvtColor(pixels, cv2.COLOR_YCrCb2BGR)
 
         return pixels
+
+    @staticmethod
+    def generate_uvs(size: int, device) -> torch.Tensor:
+        uvs = []
+        for row in range(size):
+            u = (2 * (row + 0.5) / size) + 1
+            for col in range(size):
+                v = (2 * (col + 0.5) / size) + 1
+                uvs.append((u, v))
+        
+        return torch.FloatTensor(uvs).to(device=device)
 
     def psnr(self, outputs: torch.Tensor) -> float:
         mse = torch.square(255 * (outputs - self.val_color)).mean().item()
