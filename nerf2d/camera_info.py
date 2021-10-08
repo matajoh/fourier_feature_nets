@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 import cv2
 import numpy as np
-import svt
+import scenepic as sp
 
 
 def normalize(x):
@@ -118,8 +118,8 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         points_far = (camera_pos + ray_dir * zfar).reshape(points.shape[0], points.shape[1], 3)
         return points_near, points_far
 
-    def to_svt(self, znear=0.1, zfar=100) -> svt.Camera:
+    def to_svt(self, znear=0.1, zfar=100) -> sp.Camera:
         """Creates an SVT camera from this camera."""
-        world_to_camera = svt.Transforms.gl_world_to_camera(self.extrinsic)
-        projection = svt.Transforms.gl_projection(self.intrinsic, self.resolution[0], self.resolution[1], znear, zfar)
-        return svt.Camera(world_to_camera, projection)
+        world_to_camera = sp.Transforms.gl_world_to_camera(self.extrinsic)
+        projection = sp.Transforms.gl_projection(self.intrinsic, self.resolution[0], self.resolution[1], znear, zfar)
+        return sp.Camera(world_to_camera, projection)

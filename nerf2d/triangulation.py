@@ -2,7 +2,7 @@
 
 import cv2
 import numpy as np
-import svt
+import scenepic as sp
 import trimesh
 
 
@@ -63,7 +63,7 @@ class Triangulation:
 
     def save_svt(self, path, camera_info, frames, landmarks, landmarks3d, rays, scan_path=None):
         """Saves a descriptive SVT depicting the accuracy of the triangulation."""
-        scene = svt.Scene()
+        scene = sp.Scene()
         widths = [info.resolution[0] * 256 // info.resolution[1] for info in camera_info]
         heights = [256] * len(camera_info)
         canvas3ds = [scene.create_canvas_3d(width=width, height=height)
@@ -99,15 +99,15 @@ class Triangulation:
         # show triangulation for each landmark on the first frame
         if scan_path:
             scan = trimesh.load(scan_path)
-            scan_mesh = scene.create_mesh(layer_id="scan", shared_color=svt.Colors.Gray)
+            scan_mesh = scene.create_mesh(layer_id="scan", shared_color=sp.Colors.Gray)
             verts = scan.triangles.reshape(-1, 3)
             triangles = np.arange(len(verts)).reshape(-1, 3)
             scan_mesh.add_mesh_without_normals(verts, triangles)
         else:
             scan_mesh = None
 
-        estimate_mesh = scene.create_mesh(layer_id="estimates", shared_color=svt.Colors.Yellow)
-        estimate_mesh.add_cube(transform=svt.Transforms.scale(0.005))
+        estimate_mesh = scene.create_mesh(layer_id="estimates", shared_color=sp.Colors.Yellow)
+        estimate_mesh.add_cube(transform=sp.Transforms.scale(0.005))
         estimate_mesh.enable_instancing(landmarks3d[0])
 
         focus_point = landmarks3d[0].mean(0)
@@ -129,11 +129,11 @@ class Triangulation:
             if scan_mesh:
                 orbit_frame.add_mesh(scan_mesh)
 
-            orbit_rot = svt.Transforms.rotation_matrix_from_axis_angle(up_dir, ldmk_id * np.pi * 2 / num_landmarks)
+            orbit_rot = sp.Transforms.rotation_matrix_from_axis_angle(up_dir, ldmk_id * np.pi * 2 / num_landmarks)
             orbit_pos = np.dot(orbit_rot[:3, :3], forward_dir)
             orbit_pos = orbit_pos / np.linalg.norm(orbit_pos)
             orbit_pos = focus_point + orbit_pos * orbit_distance
-            orbit_frame.camera = svt.Camera(orbit_pos, focus_point, up_dir)
+            orbit_frame.camera = sp.Camera(orbit_pos, focus_point, up_dir)
 
             for camera, ray, canvas3d, color in zip(svt_cameras, cam_rays, canvas3ds, colors):
                 frame = canvas3d.create_frame(focus_point=focus_point)

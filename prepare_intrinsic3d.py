@@ -7,7 +7,7 @@ import os
 import cv2
 import numpy as np
 from nerf2d import CameraInfo, Triangulation
-import svt
+import scenepic as sp
 
 
 def _load_matrix(path: str) -> np.ndarray:
@@ -191,7 +191,7 @@ def _build_dataset():
              resolution=resolution)
 
 
-def _create_svt():
+def _create_svt(num_frames = 0):
     data = np.load("D:\\Data\\intrinsic3d\\tomb_statuary.npz")
     points = data["points"]
     colors = data["colors"].astype(np.float32) / 255
@@ -202,13 +202,15 @@ def _create_svt():
 
     focus_point = points.mean(0)
 
-    scene = svt.Scene()
+    scene = sp.Scene()
     canvas = scene.create_canvas_3d(width=800, height=600)
     mesh = scene.create_mesh()
-    mesh.add_icosphere(color=svt.Colors.Magenta, transform=svt.Transforms.scale(0.01))
+    mesh.add_icosphere(color=sp.Colors.Magenta, transform=sp.Transforms.scale(0.01))
     mesh.enable_instancing(points, colors=colors[:, ::-1])
 
-    num_frames = frames.shape[0]
+    if num_frames == 0:
+        num_frames = frames.shape[0]
+
     for i in range(num_frames):
         print(i, "/", num_frames)
         image = scene.create_image()
@@ -218,9 +220,9 @@ def _create_svt():
         svt_camera = camera.to_svt()
 
         frustum_mesh = scene.create_mesh(layer_id="frustums")
-        frustum_mesh.add_camera_frustum(svt_camera, svt.Colors.White, thickness=0.005, depth=0.2)
+        frustum_mesh.add_camera_frustum(svt_camera, sp.Colors.White, thickness=0.005, depth=0.2)
 
-        image_mesh = scene.create_mesh(shared_color=svt.Colors.White, double_sided=True, layer_id="images")
+        image_mesh = scene.create_mesh(shared_color=sp.Colors.White, double_sided=True, layer_id="images")
         image_mesh.texture_id = image.image_id
         image_mesh.add_camera_image(svt_camera, depth=0.2)
 
@@ -229,12 +231,12 @@ def _create_svt():
         frame.add_mesh(frustum_mesh)
         frame.add_mesh(image_mesh)
 
-    scene.save_as_html("D:\\Data\\intrinsic3d\\tomb_statuary.html")
+    scene.save_as_html("D:\\Data\\intrinsic3d\\tomb_statuary.html", "Tomb Statuary")
 
 
 def _main():
     #_extract_keypoints()
-    _build_dataset()
+    #_build_dataset()
     _create_svt()
 
    
