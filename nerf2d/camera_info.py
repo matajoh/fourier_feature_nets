@@ -103,6 +103,19 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         h_coords = np.concatenate([h_coords, np.ones((h_coords.shape[0], 2), np.float32)], axis=-1)
         return (unprojection @ h_coords.T).T
 
+    def project(self, positions: np.ndarray) -> np.ndarray:
+        """Projects 3D positions into 2D points in the image plane"""
+        projection = np.eye(4, dtype=np.float32)
+        projection[:3, :3] = self.intrinsic
+        projection = projection @ np.linalg.inv(self.extrinsic)
+        ones = np.ones((projection.shape[0], 1), np.float32)
+        h_coords = np.concatenate([positions, ones], -1)
+        points = (projection @ h_coords.T).T
+        center = (np.array(self.resolution, np.float32) - 1) / 2
+        center = center.reshape(1, 1, 2)
+        points = (points - center) / center
+        return points        
+
     def raycast(self, points: np.ndarray, znear=1, zfar=100) -> Tuple[np.ndarray, np.ndarray]:
         """Casts rays into the world starting corresponding to the specific 2D point positions.
 
@@ -118,8 +131,8 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         points_far = (camera_pos + ray_dir * zfar).reshape(points.shape[0], points.shape[1], 3)
         return points_near, points_far
 
-    def to_svt(self, znear=0.1, zfar=100) -> sp.Camera:
-        """Creates an SVT camera from this camera."""
+    def to_scenepic(self, znear=0.1, zfar=100) -> sp.Camera:
+        """Creates an ScenePic camera from this camera."""
         world_to_camera = sp.Transforms.gl_world_to_camera(self.extrinsic)
         projection = sp.Transforms.gl_projection(self.intrinsic, self.resolution[0], self.resolution[1], znear, zfar)
         return sp.Camera(world_to_camera, projection)
