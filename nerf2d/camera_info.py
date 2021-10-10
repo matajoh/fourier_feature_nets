@@ -132,7 +132,7 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         return points_near, points_far
 
     def to_scenepic(self, znear=0.1, zfar=100) -> sp.Camera:
-        """Creates an ScenePic camera from this camera."""
+        """Creates a ScenePic camera from this camera."""
         world_to_camera = sp.Transforms.gl_world_to_camera(self.extrinsic)
         projection = sp.Transforms.gl_projection(self.intrinsic, self.resolution[0], self.resolution[1], znear, zfar)
         return sp.Camera(world_to_camera, projection)

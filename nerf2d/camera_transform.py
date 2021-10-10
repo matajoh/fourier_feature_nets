@@ -83,28 +83,30 @@ class CameraTransform(nn.Module):
 
     def forward(self, positions: torch.Tensor, normalize=False) -> torch.Tensor:
         """Transforms 3D positions into 2D coordinates using a camera projection."""
-        num_voxels = positions.shape[0]
+        num_pos = positions.shape[0]
 
         positions = positions.unsqueeze(0)
         positions = positions.expand(self._num_cameras, -1, -1).reshape(-1, 3)
 
         rquat = self.rotation_quat.unsqueeze(1)
-        rquat = rquat.expand(-1, num_voxels, -1).reshape(-1, 4)
+        rquat = rquat.expand(-1, num_pos, -1).reshape(-1, 4)
 
         tvec = self.translate_vec.unsqueeze(1)
-        tvec = tvec.expand(-1, num_voxels, -1).reshape(-1, 3)
+        tvec = tvec.expand(-1, num_pos, -1).reshape(-1, 3)
 
         output = qrotate(rquat, positions)
         output = output + tvec
 
         projection = self.projection.unsqueeze(1)
-        projection = projection.expand(-1, num_voxels, -1, -1).reshape(-1, 3, 3)
+        projection = projection.expand(-1, num_pos, -1, -1).reshape(-1, 3, 3)
 
         output = torch.bmm(projection, output.unsqueeze(-1)).squeeze(-1)
-        output = output[..., :2] / output[..., 2:]
-        points = output.reshape(self._num_cameras, num_voxels, 2)
+        depth = output[..., 2:]
+        output = output[..., :2] / depth
+        points = output.reshape(self._num_cameras, num_pos, 2)
+        depth = depth.reshape(self._num_cameras, num_pos)
 
         if normalize:
             points = (points - self.center) / self.center
 
-        return points
+        return points, depth
