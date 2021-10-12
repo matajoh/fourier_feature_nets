@@ -12,6 +12,9 @@ def normalize(x):
     return x / np.linalg.norm(x, axis=-1, keepdims=True)
 
 
+Ray = namedtuple("Ray", ["origin", "direction"])
+
+
 class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix",
                                            "dist_coeffs", "map1", "map2", "intrinsic", "extrinsic"])):
     """Encapsulates calibration information about a camera and performs image rectification."""
@@ -20,10 +23,10 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         """Rectifies the provided image and returns the result."""
         return cv2.remap(image, self.map1, self.map2, cv2.INTER_CUBIC)
 
-    def update(self, extrinsic: np.ndarray, intrinsic: np.ndarray) -> "CameraInfo":
+    def update(self, camera_matrix: np.ndarray, extrinsic: np.ndarray) -> "CameraInfo":
         """Updates the extrinsic and intrinsic settings for the camera and returns a new CameraInfo object."""
-        return CameraInfo(self.name, self.resolution, self.camera_matrix,
-                          self.dist_coeffs, self.map1, self.map2, intrinsic, extrinsic)
+        return CameraInfo(self.name, self.resolution, camera_matrix,
+                          self.dist_coeffs, self.map1, self.map2, camera_matrix, extrinsic)
 
     @staticmethod
     def from_json(path: str) -> List["CameraInfo"]:
@@ -58,7 +61,7 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         camera_dicts = []
         for camera in camera_info:
             state_dict = {}
-            state_dict["camera_matrix"] = camera.camera_matrix.tolist()
+            state_dict["camera_matrix"] = camera.intrinsic.tolist()
             state_dict["dist_coeffs"] = camera.dist_coeffs.tolist()
             state_dict["resolution"] = tuple(camera.resolution)
             state_dict["transform"] = camera.extrinsic.tolist()
@@ -108,15 +111,16 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         projection = np.eye(4, dtype=np.float32)
         projection[:3, :3] = self.intrinsic
         projection = projection @ np.linalg.inv(self.extrinsic)
-        ones = np.ones((projection.shape[0], 1), np.float32)
+        ones = np.ones((positions.shape[0], 1), np.float32)
         h_coords = np.concatenate([positions, ones], -1)
         points = (projection @ h_coords.T).T
+        points = points[:, :2] / points[:, 2:3]
         center = (np.array(self.resolution, np.float32) - 1) / 2
         center = center.reshape(1, 1, 2)
         points = (points - center) / center
         return points        
 
-    def raycast(self, points: np.ndarray, znear=1, zfar=100) -> Tuple[np.ndarray, np.ndarray]:
+    def raycast(self, points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Casts rays into the world starting corresponding to the specific 2D point positions.
 
         Arguments:
@@ -127,9 +131,7 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         world_coords = self.unproject(points)
         camera_pos = self.extrinsic[:3, 3].reshape(1, 3)
         ray_dir = normalize(world_coords[:, :3] - camera_pos)
-        points_near = (camera_pos + ray_dir * znear).reshape(points.shape[0], points.shape[1], 3)
-        points_far = (camera_pos + ray_dir * zfar).reshape(points.shape[0], points.shape[1], 3)
-        return points_near, points_far
+        return camera_pos + ray_dir * 0, ray_dir
 
     def to_scenepic(self, znear=0.1, zfar=100) -> sp.Camera:
         """Creates a ScenePic camera from this camera."""

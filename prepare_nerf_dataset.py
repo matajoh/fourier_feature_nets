@@ -14,85 +14,8 @@ import scenepic as sp
 from scipy.spatial.transform import Rotation
 
 
-class GrabCutExtractor:
-    def __init__(self, resolution, stencil_radius=8, fg_color=(10, 255, 10), bg_color=(10, 10, 255)):
-        self.original_image = None
-        self.image = None
-        self.stencil_radius = stencil_radius
-        self.fg_color = fg_color
-        self.bg_color = bg_color
-        self.mask = None
-        self.mask_image = None
-        self.width, self.height = resolution
-        self.background = np.zeros((1, 65), np.float64)
-        self.foreground = np.zeros((1, 65), np.float64)
-        self.frame = np.zeros((self.height, self.width * 2, 3), np.uint8)
-        self.color = None
-
-    def draw(self, x, y):
-        if self.color is not None:
-            self.mask_image = cv2.circle(self.mask_image, (x, y), self.stencil_radius, self.color, -1)
-
-    def extract_foreground(self, image, reuse_mask=False):
-        self.original_image = image
-        height, width = image.shape[:2]
-        if width != self.width or height != self.height:
-            sigma = width / self.width
-            self.image = cv2.GaussianBlur(image, (0, 0), sigma)
-            self.image = cv2.resize(image, (self.width, self.height))
-        else:
-            self.image = image
-
-        rect = None
-        init_flag = cv2.GC_INIT_WITH_MASK
-        if not reuse_mask or self.mask is None:
-            self.mask = np.zeros(self.image.shape[:2], np.uint8)
-            rect = (25, 5, self.width - 25, self.height - 5)
-            init_flag = cv2.GC_INIT_WITH_RECT
-        else:
-            self.mask[self.mask == cv2.GC_BGD] = cv2.GC_PR_BGD
-            self.mask[self.mask == cv2.GC_FGD] = cv2.GC_PR_FGD
-
-        self.mask_image = np.zeros_like(self.image)
-        print("\nPerforming Initial Background Subtraction")
-        cv2.grabCut(self.image, self.mask, rect, self.background, self.foreground, 5, init_flag)
-
-        cv2.namedWindow(winname="Subtract Background")
-        cv2.setMouseCallback("Subtract Background", paint, self)
-        while True:
-            fg_mask = (self.mask_image == self.fg_color).sum(-1)
-            bg_mask = (self.mask_image == self.bg_color).sum(-1)
-            mask = self.mask.copy()
-            mask[fg_mask == 3] = cv2.GC_FGD
-            mask[bg_mask == 3] = cv2.GC_BGD
-
-            mask2 = np.where((mask == cv2.GC_BGD) | (mask == cv2.GC_PR_BGD), 0, 1).astype('uint8')
-            self.frame[:, :self.width, :] = mask2[:, :, np.newaxis] * self.image
-            masked_image = mask2[:, :, np.newaxis] * 63
-            self.frame[:, self.width:, :] = np.where(self.mask_image != 0, self.mask_image, masked_image)
-            cv2.imshow("Subtract Background", self.frame)
-            key = cv2.waitKey(1)
-            if key & 0xFF == 27:
-                break
-
-            if key & 0xFF == 32:
-                print("\nPerforming Background Subtraction")
-                
-                cv2.grabCut(self.image, mask, None, self.background, self.foreground, 5, cv2.GC_INIT_WITH_MASK)
-                self.mask = mask
-                self.mask_image[:] = 0
-                print("\nExtraction complete")
-
-        cv2.destroyAllWindows()
-        mask2 = np.where((mask == cv2.GC_BGD) | (mask == cv2.GC_PR_BGD), 0, 1).astype('uint8')
-        if width != self.width or height != self.height:
-            mask2 = cv2.resize(mask2, (width, height))
-
-        return mask2[:, :, np.newaxis] * self.original_image
-
-
 class Occupancy(nn.Module):
-    def __init__(self, cameras: List[CameraInfo], num_levels, max_voxels):
+    def __init__(self, cameras: List[CameraInfo], num_levels, max_voxels, shared_intrinsics=True):
         nn.Module.__init__(self)
         self.voxels = OcTree(num_levels, max_voxels)
         
@@ -103,7 +26,7 @@ class Occupancy(nn.Module):
         opacity = torch.zeros(len(positions), dtype=torch.float32)
         self.opacity = nn.Parameter(opacity)
 
-        self.camera_transform = CameraTransform(cameras)
+        self.camera_transform = CameraTransform(cameras, shared_intrinsics)
 
         self.log = []
 
@@ -111,7 +34,7 @@ class Occupancy(nn.Module):
         points, depth = self.camera_transform(self.positions, True)
         points = points.unsqueeze(1)
         images = images.unsqueeze(1)
-        targets = F.grid_sample(images, points, align_corners=False)
+        targets = F.grid_sample(images, points, align_corners=False, padding_mode="zeros")
         targets = targets.reshape(points.shape[0], -1)
         weights = torch.exp(-depth)
         return targets, weights
@@ -138,18 +61,13 @@ class Occupancy(nn.Module):
             centers,
             scales))
 
-    def fit(self, images: torch.Tensor, num_steps=1500, merge_split_freq=100):
+    def fit(self, images: torch.Tensor, num_steps: int, num_finetune: int):
         opacity_params = {
             "params": [self.opacity],
             "lr": 1e-2
         }
 
-        camera_params = {
-            "params": [self.camera_transform.rotation_quat, self.camera_transform.translate_vec],
-            "lr": 1e-5
-        }
-
-        optim = torch.optim.Adam([opacity_params, camera_params])
+        optim = torch.optim.Adam([opacity_params])
         
         def _closure():
             optim.zero_grad()
@@ -157,26 +75,43 @@ class Occupancy(nn.Module):
             loss.backward()
             return loss
 
-        merge_start = merge_split_freq + merge_split_freq // 2
-        merge_stop = num_steps // 2
+        add_camera = num_steps // 4
+        cameras_added = False
         for i in range(num_steps):
             optim.step(_closure)
-            if merge_start <= i < merge_stop and (i - merge_start) % merge_split_freq == 0:
-                print("Merging/Splitting...")
-                opacity = self.opacity.detach().cpu().numpy()
-                opacity = self.voxels.merge_and_split(opacity, 0.1)
-                positions = self.voxels.leaf_centers()
-                positions = torch.from_numpy(positions).to(device=images.device)
-                opacity = torch.from_numpy(opacity).to(device=images.device)
-                self.opacity = nn.Parameter(opacity)
-                self.positions = nn.Parameter(positions, requires_grad=False)
-                opacity_params["params"] = [self.opacity]
-                optim = torch.optim.Adam([opacity_params, camera_params])
+            if i >= add_camera and not cameras_added:
+                print("Starting to optimize the cameras...")
+                optim = torch.optim.Adam([opacity_params, *self.camera_transform.param_groups])
+                cameras_added = True
                 
             if i % 10 == 0:
                 self._log(i, self._loss(images).item())
 
-        self._log(num_steps, self._loss(images).item())
+        print("Merging octree...")
+        opacity = self.opacity.detach().cpu().numpy()
+        for i in range(4):
+            opacity = self.voxels.merge(opacity, 0.1)
+
+        print("Splitting octree...")
+        for i in range(4):
+            opacity = self.voxels.split(opacity, 0.1)
+
+        positions = self.voxels.leaf_centers()
+        positions = torch.from_numpy(positions).to(device=images.device)
+        opacity = torch.from_numpy(opacity).to(device=images.device)
+        self.opacity = nn.Parameter(opacity)
+        self.positions = nn.Parameter(positions, requires_grad=False)
+        opacity_params["params"] = [self.opacity]
+
+        print("Finetuning opacity...")
+        optim = torch.optim.Adam([opacity_params])
+        for i in range(num_steps, num_steps + num_finetune):
+            optim.step(_closure)
+            if i % 10 == 0:
+                self._log(i, self._loss(images).item())
+
+        self._log(num_steps + num_finetune, self._loss(images).item())
+
 
 def _extract_masks(image_dir):
     masks_dir = os.path.join(image_dir, "masks")
@@ -193,15 +128,14 @@ def _extract_masks(image_dir):
             continue
 
         image = cv2.imread(os.path.join(image_dir,name))
-        
-        if extractor is None:
-            extractor = GrabCutExtractor((image.shape[1], image.shape[0]))
 
-        mask = extractor.extract_foreground(image, True)
+        chroma = [255, 255, 255]
+        test = (image == chroma).sum(-1)
+        mask = test == 3
         cv2.imwrite(mask_path, mask)
 
 
-def _carve_and_calibrate(image_dir, initial_depth, max_voxels, num_steps, merge_split_freq):
+def _carve_and_calibrate(image_dir, initial_depth, max_voxels, num_steps, num_finetune):
     mask_dir = os.path.join(image_dir, "masks")
     device = "cuda"
 
@@ -217,13 +151,14 @@ def _carve_and_calibrate(image_dir, initial_depth, max_voxels, num_steps, merge_
     images = torch.from_numpy(images).to(device=device)
 
     num_cameras, height, width = images.shape[:3]
-    angle_diff = 2 * np.pi / len(images)
+    angle_diff = 2 * np.pi / (len(images) - 1)
     elevation = -np.pi / 6
     cameras = []
     for i in range(num_cameras):
         position = np.array([0, 0, 3, 1], np.float32)
         position = sp.Transforms.rotation_about_x(elevation) @ position
         position = sp.Transforms.rotation_about_y(i * angle_diff) @ position
+        position = sp.Transforms.translate([0, -1, 0]) @ position
         position = position[:3]
         rotation = np.linalg.inv(sp.Transforms.look_at_rotation([0, 0, 0], position, [0, -1, 0]))
         camera_to_world = sp.Transforms.translate(position) @ rotation
@@ -237,7 +172,7 @@ def _carve_and_calibrate(image_dir, initial_depth, max_voxels, num_steps, merge_
     occupancy = Occupancy(cameras, initial_depth, max_voxels)
     occupancy.to(device)
 
-    occupancy.fit(images, num_steps, merge_split_freq)
+    occupancy.fit(images, num_steps, num_finetune)
     entries = {}
     entries["num_entries"] = len(occupancy.log)
     entries["iterations"] = np.stack([entry[0] for entry in occupancy.log])
@@ -252,6 +187,9 @@ def _carve_and_calibrate(image_dir, initial_depth, max_voxels, num_steps, merge_
     np.savez(os.path.join(image_dir, "carving.npz"), **entries)
     occupancy.voxels.save(os.path.join(image_dir, "voxels.npz"))
 
+    cameras_path = os.path.join(image_dir, "cameras.json")
+    CameraInfo.to_json(cameras_path, occupancy.camera_transform.camera_info)
+
 
 def _create_carve_scenepic(image_dir):
     mask_dir = os.path.join(image_dir, "masks")
@@ -264,7 +202,7 @@ def _create_carve_scenepic(image_dir):
         images.append(image[:, :, 0] != 0)
 
     height, width = images[0].shape[:2]
-    data = np.load("carving.npz")
+    data = np.load(os.path.join(image_dir, "carving.npz"))
 
     intrinsics = data["intrinsics"]
     rotations = [Rotation.from_quat(rquat).as_matrix() for rquat in data["rotation_quats"][-1]]
@@ -294,11 +232,12 @@ def _create_carve_scenepic(image_dir):
         mesh.add_camera_image(camera, depth=0.2)
         image_meshes.append(mesh)
 
-        frustums.add_camera_frustum(camera, colors[i], depth=0.2, thickness=0.01)
+        frustums.add_camera_frustum(camera, colors[i], depth=0.2, thickness=0.004)
 
-    centers = data["centers1500"]
-    scales = data["scales1500"]
-    opacity = data["opacity1500"]
+    final = data["iterations"][-1]
+    centers = data["centers{:04}".format(final)]
+    scales = data["scales{:04}".format(final)]
+    opacity = data["opacity{:04}".format(final)]
     colors = cmap(np.linspace(0, 1, 5))[:, :3]
     # we want five meshes to represent the different levels
     voxel_meshes = [scene.create_mesh("voxels{}".format(i),
@@ -329,14 +268,14 @@ def _parse_args():
     parser.add_argument("--initial-depth", type=int, default=6, help="Initial depth of the voxel octree")
     parser.add_argument("--max-voxels", type=int, default=52000, help="Maximum number of voxels")
     parser.add_argument("--num-steps", type=int, default=1500, help="Number of carving steps")
-    parser.add_argument("--merge-split-freq", type=int, default=100, help="How often to merge/split the voxel octree")
+    parser.add_argument("--num-finetune", type=int, default=500, help="Number of fine-tuning steps")
     return parser.parse_args()
 
 
 def _main():
     args = _parse_args()
     _extract_masks(args.image_dir)
-    _carve_and_calibrate(args.image_dir, args.initial_depth, args.max_voxels, args.num_steps, args.merge_split_freq)
+    _carve_and_calibrate(args.image_dir, args.initial_depth, args.max_voxels, args.num_steps, args.num_finetune)
     _create_carve_scenepic(args.image_dir)
 
 
