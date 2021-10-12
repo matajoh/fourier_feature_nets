@@ -1,4 +1,5 @@
 import argparse
+from nerf2d.dataset import PixelData
 
 import cv2
 import nerf2d
@@ -17,6 +18,7 @@ def _parse_args():
     parser.add_argument("--num-frequencies", type=int, default=256, help="Number of frequencies used for encoding")
     parser.add_argument("--pos-sigma", type=float, default=6, help="Value of sigma for the positional model")
     parser.add_argument("--gauss-sigma", type=float, default=10, help="Value of sigma for the gaussian model")
+    parser.add_argument("--num-steps", type=int, default=2000)
     return parser.parse_args()
 
 
@@ -43,7 +45,7 @@ def _main():
 
     model = model.to("cuda")
     optim = torch.optim.Adam(model.parameters(), 1e-3)
-    for step in range(2000):
+    for step in range(args.num_steps):
         if step % 25 == 0:
             with torch.no_grad():
                 output = model(dataset.val_uv)
@@ -63,6 +65,10 @@ def _main():
         print("final", dataset.psnr(output))
         frame[:, 512:] = dataset.to_image(output)
         cv2.imshow("progress", frame)
+
+        output = model(nerf2d.PixelDataset.generate_uvs(1024, "cuda"))
+        image = dataset.to_image(output, 1024)
+        cv2.imshow("super-resolution", image)
         cv2.waitKey()
 
 
