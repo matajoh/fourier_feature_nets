@@ -1,6 +1,6 @@
 from collections import namedtuple
 from itertools import product
-from typing import Set, Sequence, List
+from typing import Set, Sequence, List, Tuple
 
 import numpy as np
 
@@ -200,6 +200,86 @@ class OcTree:
         parents = data["parents"]
         for id, scale, center, parent in zip(ids, scales, centers, parents):
             result.nodes[id] = OcTree.Node(id, scale, center, parent)
+
+    @staticmethod
+    def _batch_intersect(bounds: np.ndarray, points: np.ndarray, dirs_inv: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        with np.errstate(invalid='ignore'):
+            t = np.nan_to_num((bounds - points[:, np.newaxis, :]) * dirs_inv[:, np.newaxis, :])
+
+        tc_min = t.min(1).max(-1)
+        tc_max = t.max(1).min(-1)
+        return tc_min, tc_max
+
+    @staticmethod
+    def _batch_contains(centers: np.ndarray, scales: np.ndarray, points: np.ndarray) -> np.ndarray:
+        diff = np.abs(points - centers) <= scales
+        return diff.all(-1)
+
+    @staticmethod
+    def _batch_find_child(centers: np.ndarray, node_ids: np.ndarray, points: np.ndarray) -> np.ndarray:
+        bits = points >= centers
+        starts = (node_ids << 3) + 1
+        return starts + np.packbits(bits[:, ::-1], axis=-1, bitorder="little").reshape(-1)
+
+    def batch_intersect(self, points: np.ndarray, directions: np.ndarray):
+        with np.errstate(divide='ignore', invalid='ignore'):
+            dirs_inv = np.reciprocal(directions)
+
+        node_index = np.array(list(self.nodes.keys()), np.int64)
+        node_index.sort()
+
+        node_leaves = np.array(list(self.leaves), np.int64)
+        node_leaves.sort()
+
+        node_centers = [self.nodes[i].center for i in node_index]
+        node_centers = np.stack(node_centers)
+
+        node_scales = [self.nodes[i].scale for i in node_index]
+        node_scales = np.stack(node_scales).reshape(-1, 1)
+
+        node_bounds = np.stack([node_centers - node_scales, node_centers + node_scales], 1)
+
+        current_node_ids = np.zeros(len(points), np.int64)
+        t_stops = []
+        node_stops = []
+        leaf_stops = []
+        t, t_max = self._batch_intersect(node_bounds[current_node_ids], points, dirs_inv)
+        t += 1e-5
+        while (t < t_max).any():
+            t_stops.append(t.copy())
+            node_stops.append(current_node_ids.copy())
+
+            current_index = node_index.searchsorted(current_node_ids)
+            centers = node_centers[current_index]
+            scales = node_scales[current_index]
+            bounds = node_bounds[current_index]
+
+            is_leaf = node_leaves.searchsorted(current_node_ids)
+            is_leaf = node_leaves[is_leaf] == current_node_ids            
+            leaf_stops.append(is_leaf)
+            p = points + t[:, np.newaxis] * directions
+            child_ids = self._batch_find_child(centers, current_node_ids, p)
+            parent_ids = (current_node_ids - 1) >> 3
+            contains = self._batch_contains(centers, scales, p)
+            
+            # if is_leaf:
+            #   t = tc_max + 1e-5
+            # else:
+            #   t = t
+            _, tc_max = self._batch_intersect(bounds, points, dirs_inv)
+            t = np.where(is_leaf, tc_max + 1e-5, t)
+
+            # if is_leaf:
+            #   id = parent
+            # else:
+            #   if contains(point):
+            #       id = child
+            #   else:
+            #       id = parent
+            #
+            current_node_ids = np.where(contains & (~is_leaf), child_ids, parent_ids)
+
+        return t_stops, node_stops
 
     def intersect(self, point: np.ndarray, direction: np.ndarray):
         with np.errstate(divide='ignore', invalid='ignore'):

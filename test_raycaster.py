@@ -67,6 +67,8 @@ def _main():
         points = camera.project(positions[camera_pos])
         points, dirs = camera.raycast(points)
 
+        ray_voxels = voxels.batch_intersect(points, dirs)
+
         camera_mesh = scene.create_mesh(layer_id="cameras")
         sp_camera = camera.to_scenepic()
         camera_mesh.add_camera_frustum(sp_camera, colors[start])
