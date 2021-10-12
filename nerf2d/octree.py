@@ -254,9 +254,10 @@ class OcTree:
             scales = node_scales[current_index]
             bounds = node_bounds[current_index]
 
-            is_leaf = node_leaves.searchsorted(current_node_ids)
-            is_leaf = node_leaves[is_leaf] == current_node_ids            
-            leaf_stops.append(is_leaf)
+            leaf_index = node_leaves.searchsorted(current_node_ids)
+            is_leaf = node_leaves[leaf_index] == current_node_ids
+            leaf_index = np.where(is_leaf, leaf_index, -1)
+            leaf_stops.append(leaf_index)
             p = points + t[:, np.newaxis] * directions
             child_ids = self._batch_find_child(centers, current_node_ids, p)
             parent_ids = (current_node_ids - 1) >> 3
@@ -279,7 +280,7 @@ class OcTree:
             #
             current_node_ids = np.where(contains & (~is_leaf), child_ids, parent_ids)
 
-        return t_stops, node_stops
+        return np.stack(t_stops), np.stack(node_stops), np.stack(leaf_stops)
 
     def intersect(self, point: np.ndarray, direction: np.ndarray):
         with np.errstate(divide='ignore', invalid='ignore'):
