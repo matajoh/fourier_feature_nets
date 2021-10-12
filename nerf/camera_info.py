@@ -1,3 +1,5 @@
+"""Module containing camera logic."""
+
 from collections import namedtuple
 import json
 from typing import List, Tuple
@@ -76,8 +78,13 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         """Creates a default CameraInfo object using the `data` argument as a reference.
 
         Arguments:
-            path: path to the output JSON file
-            data: Either a (num_cameras, height, width, 3) tensor of images, or a sequence NPZ reference
+            name (str): name for the camera
+            resolution (Tuple[int, int]): the resolution of the camera images
+            intrinsics (np.ndarray): the 3x3 intrinsics
+            extrinsics (np.ndarray): the 4x4 extrinsics (camera to world matrix)
+
+        Returns:
+            CameraInfo: a new camera object
         """
         resolution = tuple(resolution)
         intrinsics = intrinsics[:3, :3]
@@ -91,7 +98,6 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
 
         return CameraInfo(name, resolution, intrinsics, dist_coeffs,
                           map1, map2, new_camera_matrix, extrinsics)
-
 
     def unproject(self, points: np.ndarray) -> np.ndarray:
         """Unprojects a series of 2D points to their 3D positions."""
@@ -107,7 +113,7 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         return (unprojection @ h_coords.T).T
 
     def project(self, positions: np.ndarray) -> np.ndarray:
-        """Projects 3D positions into 2D points in the image plane"""
+        """Projects 3D positions into 2D points in the image plane."""
         projection = np.eye(4, dtype=np.float32)
         projection[:3, :3] = self.intrinsic
         projection = projection @ np.linalg.inv(self.extrinsic)
@@ -118,7 +124,7 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         center = (np.array(self.resolution, np.float32) - 1) / 2
         center = center.reshape(1, 1, 2)
         points = (points - center) / center
-        return points        
+        return points
 
     def raycast(self, points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Casts rays into the world starting corresponding to the specific 2D point positions.

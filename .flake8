@@ -1,0 +1,19 @@
+#================================== Baseline config v0.1 ==================================
+[flake8]
+inline-quotes = double
+import-order-style = google
+docstring-convention = google
+max-line-length = 120
+
+extend-ignore =
+    E203, # Whitespace before ':'
+            # A false positive in slicing (where PEP8 allows space around ':' )
+            # Being fixed in pycodestyle (https://github.com/PyCQA/pycodestyle/pull/914)
+    N812, # Lowercase imported as non lowercase
+            # Quite common in ML (e.g. import torch.nn.functional as F)
+    N817, # Camelcase imported as acronym
+            # Commonly used with standard library (e.g. import xml.etree.ElementTree as ET)
+
+#================================== Repo-specific config ==================================
+ignore-names = 
+    R,T   # Used in PyTorch3D API (suppress N806 - Variable in function should be lowercase)

@@ -1,0 +1,6 @@
+scenepic
+numpy
+opencv-python
+torch
+matplotlib
+trimesh

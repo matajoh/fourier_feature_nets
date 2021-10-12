@@ -9,6 +9,7 @@ import torch
 
 PixelData = namedtuple("DataTensors", ["uv", "color"])
 
+
 class PixelDataset:
     def __init__(self, size: int, color_space: str, train_data: PixelData, val_data: PixelData):
         self.size = size
@@ -28,7 +29,7 @@ class PixelDataset:
             start = (pixels.shape[1] - pixels.shape[0]) // 2
             end = start + pixels.shape[0]
             pixels = pixels[:, start:end]
-        
+
         if pixels.shape[0] != size:
             sigma = pixels.shape[0] / size
             pixels = cv2.GaussianBlur(pixels, (0, 0), sigma)
@@ -59,13 +60,13 @@ class PixelDataset:
         train_data = PixelData(torch.FloatTensor(train_uv), torch.FloatTensor(train_color))
         val_data = PixelData(torch.FloatTensor(val_uv), torch.FloatTensor(val_color))
         return PixelDataset(size, color_space, train_data, val_data)
-    
+
     def to(self, *args) -> "PixelDataset":
         train_data = PixelData(self.train_uv.to(*args), self.train_color.to(*args))
         val_data = PixelData(self.val_uv.to(*args), self.val_color.to(*args))
         return PixelDataset(self.size, self.color_space, train_data, val_data)
 
-    def to_image(self, colors: torch.Tensor, size = 0) -> np.ndarray:
+    def to_image(self, colors: torch.Tensor, size=0) -> np.ndarray:
         if size == 0:
             size = self.size
 
@@ -83,7 +84,7 @@ class PixelDataset:
             for col in range(size):
                 v = (2 * (col + 0.5) / size) + 1
                 uvs.append((u, v))
-        
+
         return torch.FloatTensor(uvs).to(device=device)
 
     def psnr(self, outputs: torch.Tensor) -> float:
