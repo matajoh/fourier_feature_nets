@@ -137,7 +137,7 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "camera_matrix"
         world_coords = self.unproject(points)
         camera_pos = self.extrinsic[:3, 3].reshape(1, 3)
         ray_dir = normalize(world_coords[:, :3] - camera_pos)
-        return camera_pos + ray_dir * 0, ray_dir
+        return camera_pos + 0 * ray_dir, ray_dir
 
     def to_scenepic(self, znear=0.1, zfar=100) -> sp.Camera:
         """Creates a ScenePic camera from this camera."""

@@ -4,40 +4,77 @@ from typing import List
 
 import cv2
 from matplotlib.pyplot import get_cmap
-from nerf2d import CameraInfo, CameraTransform, OcTree
+from nerf import CameraInfo, OcTree
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim
 import scenepic as sp
-from scipy.spatial.transform import Rotation
 
 
 class Occupancy(nn.Module):
-    def __init__(self, cameras: List[CameraInfo], num_levels, max_voxels, shared_intrinsics=True):
+    def __init__(self, cameras: List[CameraInfo], images: np.ndarray, num_levels: int, max_voxels: int):
         nn.Module.__init__(self)
-        self.voxels = OcTree(num_levels, max_voxels)
+        self.voxels = OcTree(num_levels)
+        self._max_voxels = max_voxels
         
         positions = self.voxels.leaf_centers()
         positions = torch.from_numpy(positions)
         self.positions = nn.Parameter(positions, requires_grad=False)
 
+        images = torch.from_numpy(images)
+        self.images = nn.Parameter(images, requires_grad=False)
+
+        self.cameras = cameras
+
         opacity = torch.zeros(len(positions), dtype=torch.float32)
         self.opacity = nn.Parameter(opacity)
 
-        self.camera_transform = CameraTransform(cameras, shared_intrinsics)
-
         self.log = []
 
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        points, depth = self.camera_transform(self.positions, True)
+    def _update_rays(self):
+        positions = self.positions.cpu().numpy()
+        leaves = []
+        deltas = []
+        points = []
+        max_dist = torch.zeros((len(positions), 1), dtype=torch.float32)
+        max_dist[:] = 1e10
+        for camera in self.cameras:
+            cam_points = camera.project(positions)
+            starts, dirs = camera.raycast(cam_points)
+            voxels = self.voxels.batch_intersect(starts, dirs)
+            cam_deltas = voxels.t_stops[:, 1:] - voxels.t_stops[:, :-1]
+            cam_deltas = torch.cat([cam_deltas, max_dist], dim=-1)
+            deltas.append(cam_deltas)
+            leaves.append(voxels.leaf_index)
+            points.append(torch.from_numpy(cam_points))
+
+        device = self.images.device
+        self.leaves = [torch.from_numpy(x).to(device) for x in leaves]
+        self.deltas = [torch.from_numpy(d).to(device) for d in deltas]
+        points = torch.stack(points)
         points = points.unsqueeze(1)
-        images = images.unsqueeze(1)
-        targets = F.grid_sample(images, points, align_corners=False, padding_mode="zeros")
-        targets = targets.reshape(points.shape[0], -1)
-        weights = torch.exp(-depth)
-        return targets, weights
+        images = self.images.unsqueeze(1)
+        self.targets = F.grid_sample(images, points, align_corners=False, padding_mode="zeros")
+
+    def forward(self) -> torch.Tensor:
+        # for camera in cameras
+        # 1. sample the leaf opacity values
+        # 2. compute the volume equation
+        outputs = []
+        left_trans = torch.ones((len(self.positions), 1), dtype=torch.float32, device=self.opacity.device)
+        for leaves, deltas in zip(self.leaves, self.deltas):
+            opacity = self.opacity[leaves]
+            alpha = 1 - torch.exp(-(opacity * deltas))
+            trans = torch.minimum(1, 1 - alpha + 1e-10)
+            _, trans = trans.split([1, leaves.shape[1] - 1])
+            trans = torch.cat([left_trans, trans], -1)
+            weights = alpha * torch.cumprod(trans, -1)
+            cam_output = weights.sum(-1)
+            outputs.append(cam_output)
+
+        return torch.stack(outputs)
 
     def _loss(self, images: torch.Tensor):
         targets, weights = self.forward(images)
