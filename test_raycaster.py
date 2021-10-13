@@ -35,14 +35,14 @@ def _test_cameras() -> List[CameraInfo]:
 def _main():
     cameras = _test_cameras()
 
-    voxels = OcTree(4, 4096)
+    voxels = OcTree(4)
     positions = voxels.leaf_centers()
     opacity = np.random.uniform(0, 1, len(positions))
-    voxels.split(opacity, 0.1)
+    voxels.split(opacity, 0.1, 4096)
     opacity = np.random.uniform(0, 1, len(voxels.leaves))
     voxels.merge(opacity, 0.1)
     opacity = np.random.uniform(0, 1, len(voxels.leaves))
-    voxels.split(opacity, 0.1)
+    voxels.split(opacity, 0.1, 4096)
     positions = voxels.leaf_centers()
 
     pos_per_camera = 10
@@ -87,7 +87,7 @@ def _main():
             for t, node_id in zip(t_stops, node_ids):
                 node = voxels.nodes[node_id]
                 voxel_transform = sp.Transforms.scale(2 * node.scale)
-                voxel_transform = voxel_transform @ sp.Transforms.translate(node.center)
+                voxel_transform = sp.Transforms.translate(node.center) @ voxel_transform
                 ray_voxel_mesh.add_cube(color, transform=voxel_transform)
                 p0 = points[i] + t_last * dirs[i]
                 p1 = points[i] + t * dirs[i]
@@ -102,8 +102,8 @@ def _main():
             frame.add_mesh(ray_mesh)
             frame.add_mesh(voxel_mesh)
 
-    scene.framerate = 10
-    scene.save_as_html("raycast.html")
+    scene.framerate = 5
+    scene.save_as_html("voxel_raycaster.html", "Voxel Raycaster")
 
 
 if __name__ == "__main__":

@@ -115,6 +115,9 @@ class OcTree:
             self.leaves.add(child.id)
 
         self.leaves.remove(leaf_id)
+        if current.parent in self.branches:
+            self.branches.remove(current.parent)
+
         self.branches.add(leaf_id)
 
     def _merge(self, branch_id: int):
@@ -124,7 +127,6 @@ class OcTree:
             self.leaves.remove(child_id)
 
         self.leaves.add(branch_id)
-        self.branches.remove(branch_id)
 
     def _update_tensors(self):
         self._node_index = np.array(list(self.nodes.keys()), np.int64)
@@ -197,6 +199,8 @@ class OcTree:
             else:
                 raise KeyError()
 
+        # this is necessary as some nodes may have had
+        # all of their branch children merged
         self.branches.clear()
         for node in self.nodes.values():
             if node.id in self.leaves:
