@@ -1,3 +1,4 @@
+"""Module providing dataset classes for use in training NeRF models."""
 
 from collections import namedtuple
 import math
@@ -7,11 +8,30 @@ import numpy as np
 import torch
 
 
-PixelData = namedtuple("DataTensors", ["uv", "color"])
+class PixelData(namedtuple("PixelData", ["uv", "color"])):
+    """Tuple representing pixel data.
+
+    Description:
+        There are two components:
+
+        uv (torch.Tensor): a Nx2 tensor of UV values ranging from -1 to 1
+        color (torch.Tensor): a Nx3 tensor of color values
+    """
 
 
 class PixelDataset:
-    def __init__(self, size: int, color_space: str, train_data: PixelData, val_data: PixelData):
+    """Dataset consisting of image pixels."""
+
+    def __init__(self, size: int, color_space: str,
+                 train_data: PixelData, val_data: PixelData):
+        """Constructor.
+
+        Args:
+            size (int): Square size of the image
+            color_space (str): Color space used ("RGB" or "YCrCb")
+            train_data (PixelData): The training data tensors
+            val_data (PixelData): The validation data tensors
+        """
         self.size = size
         self.color_space = color_space
         self.image = self.to_image(val_data.color)
@@ -20,6 +40,20 @@ class PixelDataset:
 
     @staticmethod
     def create(path: str, color_space: str, size=512) -> "PixelDataset":
+        """Creates a dataset from an image.
+
+        Args:
+            path (str): the path to the image file
+            color_space (str): Color space to use ("RGB" or "YCrCb")
+            size (int, optional): Size to use when resizing the image.
+                                  Defaults to 512.
+
+        Raises:
+            NotImplementedError: Raised if provided an unsupported color space
+
+        Returns:
+            PixelDataset: the constructed dataset
+        """
         pixels = cv2.imread(path)
         if pixels.shape[0] > pixels.shape[1]:
             start = (pixels.shape[0] - pixels.shape[1]) // 2
@@ -47,9 +81,9 @@ class PixelDataset:
         val_uv = []
         val_color = []
         for row in range(size):
-            u = (2 * (row + 0.5) / size) + 1
+            u = (2 * (row + 0.5) / size) - 1
             for col in range(size):
-                v = (2 * (col + 0.5) / size) + 1
+                v = (2 * (col + 0.5) / size) - 1
                 color = pixels[row, col].tolist()
                 val_uv.append((u, v))
                 val_color.append(color)
@@ -62,11 +96,27 @@ class PixelDataset:
         return PixelDataset(size, color_space, train_data, val_data)
 
     def to(self, *args) -> "PixelDataset":
+        """Equivalent of torch.Tensor.to for all tensors in the dataset.
+
+        Returns:
+            PixelDataset: the result of the to operation
+        """
         train_data = PixelData(self.train_uv.to(*args), self.train_color.to(*args))
         val_data = PixelData(self.val_uv.to(*args), self.val_color.to(*args))
         return PixelDataset(self.size, self.color_space, train_data, val_data)
 
     def to_image(self, colors: torch.Tensor, size=0) -> np.ndarray:
+        """Converts predicted colors back into an image.
+
+        Args:
+            colors (torch.Tensor): The predicted colors
+            size (int, optional): The desired size
+                                  (if different from the dataset).
+                                  Defaults to 0.
+
+        Returns:
+            np.ndarray: the image pixels in BGR format
+        """
         if size == 0:
             size = self.size
 
@@ -78,15 +128,32 @@ class PixelDataset:
 
     @staticmethod
     def generate_uvs(size: int, device) -> torch.Tensor:
+        """Generates UV values for the specified size.
+
+        Args:
+            size (int): Image size to use when computing UVs.
+            device: The torch device to use when creating the Tensor
+
+        Returns:
+            torch.Tensor: The image UVs
+        """
         uvs = []
         for row in range(size):
-            u = (2 * (row + 0.5) / size) + 1
+            u = (2 * (row + 0.5) / size) - 1
             for col in range(size):
-                v = (2 * (col + 0.5) / size) + 1
+                v = (2 * (col + 0.5) / size) - 1
                 uvs.append((u, v))
 
         return torch.FloatTensor(uvs).to(device=device)
 
-    def psnr(self, outputs: torch.Tensor) -> float:
-        mse = torch.square(255 * (outputs - self.val_color)).mean().item()
+    def psnr(self, colors: torch.Tensor) -> float:
+        """Computes the Peak Signal-to-Noise Ratio for the given colors.
+
+        Args:
+            colors (torch.Tensor): Image colors to compare.
+
+        Returns:
+            float: the computed PSNR
+        """
+        mse = torch.square(255 * (colors - self.val_color)).mean().item()
         return 20 * math.log10(255) - 10 * math.log10(mse)
