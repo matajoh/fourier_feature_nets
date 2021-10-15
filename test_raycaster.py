@@ -1,4 +1,5 @@
 """Integration test for the Raycaster (produces a cool scenepic)."""
+import timeit
 from typing import List
 
 from matplotlib.pyplot import get_cmap
@@ -37,13 +38,14 @@ def _main():
 
     voxels = OcTree(4)
     positions = voxels.leaf_centers()
-    opacity = np.random.uniform(0, 1, len(positions))
+    opacity = np.random.uniform(0, 1, voxels.num_leaves)
     voxels.split(opacity, 0.1, 4096)
-    opacity = np.random.uniform(0, 1, len(voxels.leaves))
+    opacity = np.random.uniform(0, 1, voxels.num_leaves)
     voxels.merge(opacity, 0.1)
-    opacity = np.random.uniform(0, 1, len(voxels.leaves))
+    opacity = np.random.uniform(0, 1, voxels.num_leaves)
     voxels.split(opacity, 0.1, 4096)
     positions = voxels.leaf_centers()
+    scales = voxels.leaf_scales()
 
     pos_per_camera = 10
     pos_index = np.arange(len(positions))
@@ -54,7 +56,7 @@ def _main():
     canvas = scene.create_canvas_3d(width=600, height=600)
 
     voxel_mesh = scene.create_mesh(layer_id="voxels")
-    for pos, scale in zip(voxels.leaf_centers(), voxels.leaf_scales()):
+    for pos, scale in zip(positions, scales):
         transform = sp.Transforms.translate(pos) @ sp.Transforms.scale(scale * 2)
         voxel_mesh.add_cube(sp.Colors.White, transform=transform,
                             fill_triangles=False, add_wireframe=True)
@@ -66,31 +68,27 @@ def _main():
         camera = cameras[start // pos_per_camera]
         camera_pos = pos_index[start:end]
         points = camera.project(positions[camera_pos])
-        points, dirs = camera.raycast(points)
+        starts, dirs = camera.raycast(points)
 
-        batch_voxels = voxels.batch_intersect(points, dirs)
+        time_taken = timeit.timeit(lambda: voxels.intersect(starts, dirs, 10), number=3)
+        print("Best of 3:", time_taken, "s")
+
+        ray_paths = voxels.intersect(starts, dirs, 10)
 
         camera_mesh = scene.create_mesh(layer_id="cameras")
         sp_camera = camera.to_scenepic()
         camera_mesh.add_camera_frustum(sp_camera, colors[start])
 
         for i, color in enumerate(colors[start:end]):
-            t_stops = batch_voxels.t_stops[:, i]
-            node_ids = batch_voxels.nodes[:, i]
-            leaf_index = batch_voxels.leaf_index[:, i]
-            t_stops = t_stops[leaf_index != -1]
-            node_ids = node_ids[leaf_index != -1]
-
             ray_voxel_mesh = scene.create_mesh(layer_id="ray_voxels")
             ray_mesh = scene.create_mesh(layer_id="rays")
             t_last = 0.85
-            for t, node_id in zip(t_stops, node_ids):
-                node = voxels.nodes[node_id]
-                voxel_transform = sp.Transforms.scale(2 * node.scale)
-                voxel_transform = sp.Transforms.translate(node.center) @ voxel_transform
+            for t, leaf in ray_paths[i]:
+                voxel_transform = sp.Transforms.scale(2 * scales[leaf])
+                voxel_transform = sp.Transforms.translate(positions[leaf]) @ voxel_transform
                 ray_voxel_mesh.add_cube(color, transform=voxel_transform)
-                p0 = points[i] + t_last * dirs[i]
-                p1 = points[i] + t * dirs[i]
+                p0 = starts[i] + t_last * dirs[i]
+                p1 = starts[i] + t * dirs[i]
                 ray_mesh.add_thickline(sp.Colors.Magenta, p0, p1,
                                        start_thickness=0.02, end_thickness=0.02)
                 t_last = t

@@ -22,6 +22,10 @@ class MLP(nn.Module):
         self.hidden0 = nn.Linear(num_channels, num_channels)
         self.hidden1 = nn.Linear(num_channels, num_channels)
         self.output = nn.Linear(num_channels, num_outputs)
+        torch.nn.init.xavier_uniform_(self.input.weight)
+        torch.nn.init.xavier_uniform_(self.hidden0.weight)
+        torch.nn.init.xavier_uniform_(self.hidden1.weight)
+        torch.nn.init.xavier_uniform_(self.output.weight)
 
     def forward(self, uv: torch.Tensor) -> torch.Tensor:
         """Predicts outputs from the provided uv input."""
@@ -49,6 +53,10 @@ class BasicFourierMLP(nn.Module):
         self.hidden0 = nn.Linear(num_channels, num_channels)
         self.hidden1 = nn.Linear(num_channels, num_channels)
         self.output = nn.Linear(num_channels, num_outputs)
+        torch.nn.init.xavier_uniform_(self.input.weight)
+        torch.nn.init.xavier_uniform_(self.hidden0.weight)
+        torch.nn.init.xavier_uniform_(self.hidden1.weight)
+        torch.nn.init.xavier_uniform_(self.output.weight)
 
     def forward(self, uv: torch.Tensor) -> torch.Tensor:
         """Predicts color from the provided uv input."""
@@ -85,6 +93,10 @@ class PositionalFourierMLP(nn.Module):
         self.hidden0 = nn.Linear(num_channels, num_channels)
         self.hidden1 = nn.Linear(num_channels, num_channels)
         self.output = nn.Linear(num_channels, num_outputs)
+        torch.nn.init.xavier_uniform_(self.input.weight)
+        torch.nn.init.xavier_uniform_(self.hidden0.weight)
+        torch.nn.init.xavier_uniform_(self.hidden1.weight)
+        torch.nn.init.xavier_uniform_(self.output.weight)
 
     def forward(self, uv: torch.Tensor) -> torch.Tensor:
         """Predicts outputs from the provided uv input."""
@@ -127,6 +139,10 @@ class GaussianFourierMLP(nn.Module):
         self.hidden0 = nn.Linear(num_channels, num_channels)
         self.hidden1 = nn.Linear(num_channels, num_channels)
         self.output = nn.Linear(num_channels, num_outputs)
+        torch.nn.init.xavier_uniform_(self.input.weight)
+        torch.nn.init.xavier_uniform_(self.hidden0.weight)
+        torch.nn.init.xavier_uniform_(self.hidden1.weight)
+        torch.nn.init.xavier_uniform_(self.output.weight)
 
     def forward(self, uv: torch.Tensor) -> torch.Tensor:
         """Predicts outputs from the provided uv input."""

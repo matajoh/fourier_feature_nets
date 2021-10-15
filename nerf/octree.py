@@ -1,148 +1,278 @@
-"""Module providing an OcTree datastructure."""
+"""Attempt at coding an octree using Numba."""
 
-from collections import namedtuple
+from collections import deque, namedtuple
 from itertools import product
-from typing import List, Sequence, Set, Tuple
+from typing import List, Sequence, Set
 
+from numba import njit, prange
 import numpy as np
 
-CORNERS = np.array(list(product([-1, 1], [-1, 1], [-1, 1])), np.float32)
+
+Vector = namedtuple("Vector", ["x", "y", "z"])
+Node = namedtuple("Node", ["id", "x", "y", "z", "scale"])
+Ray = namedtuple("Ray", ["x", "y", "z", "dx", "dy", "dz"])
+Intersection = namedtuple("Intersection", ["t_min", "t_max"])
+Path = namedtuple("Path", ["t_stops", "leaves"])
+
+
+@njit
+def _intersect_node_with_ray(node: Node, ray: Ray) -> Intersection:
+    dx = node.x - ray.x
+    dy = node.y - ray.y
+    dz = node.z - ray.z
+    x0 = (dx - node.scale) / ray.dx
+    y0 = (dy - node.scale) / ray.dy
+    z0 = (dz - node.scale) / ray.dz
+    x1 = (dx + node.scale) / ray.dx
+    y1 = (dy + node.scale) / ray.dy
+    z1 = (dz + node.scale) / ray.dz
+
+    if x1 < x0:
+        tmp = x0
+        x0 = x1
+        x1 = tmp
+
+    if y1 < y0:
+        tmp = y0
+        y0 = y1
+        y1 = tmp
+
+    if z1 < z0:
+        tmp = z0
+        z0 = z1
+        z1 = tmp
+
+    return Intersection(max(x0, y0, z0), min(x1, y1, z1))
+
+
+@njit
+def _cast_ray(ray: Ray, t: float) -> Vector:
+    x = ray.x + t * ray.dx
+    y = ray.y + t * ray.dy
+    z = ray.z + t * ray.dz
+    return Vector(x, y, z)
+
+
+@njit
+def _node_contains(node: Node, point: Vector) -> bool:
+    dx = abs(node.x - point.x)
+    dy = abs(node.y - point.y)
+    dz = abs(node.z - point.z)
+    return not (dx > node.scale or dy > node.scale or dz > node.scale)
+
+
+@njit
+def _find_child_of_node(node: Node, point: Vector) -> Node:
+    scale = node.scale / 2
+    child_id = (node.id << 3) + 1
+    if point.x < node.x:
+        x = node.x - scale
+        if point.y < node.y:
+            y = node.y - scale
+            if point.z < node.z:
+                z = node.z - scale
+                return Node(child_id, x, y, z, scale)
+            else:
+                z = node.z + scale
+                child_id += 1
+                return Node(child_id, x, y, z, scale)
+        else:
+            y = node.y + scale
+            child_id += 2
+            if point.z < node.z:
+                z = node.z - scale
+                return Node(child_id, x, y, z, scale)
+            else:
+                z = node.z + scale
+                child_id += 1
+                return Node(child_id, x, y, z, scale)
+    else:
+        x = node.x + scale
+        child_id += 4
+        if point.y < node.y:
+            y = node.y - scale
+            if point.z < node.z:
+                z = node.z - scale
+                return Node(child_id, x, y, z, scale)
+            else:
+                z = node.z + scale
+                child_id += 1
+                return Node(child_id, x, y, z, scale)
+        else:
+            y = node.y + scale
+            child_id += 2
+            if point.z < node.z:
+                z = node.z - scale
+                return Node(child_id, x, y, z, scale)
+            else:
+                z = node.z + scale
+                child_id += 1
+                return Node(child_id, x, y, z, scale)
+
+
+@njit
+def _trace_ray_path(scale: float, leaf_index: np.ndarray,
+                    start: np.ndarray, direction: np.ndarray,
+                    t_stops: np.ndarray, leaves: np.ndarray) -> Path:
+    stack = [Node(0, 0.0, 0.0, 0.0, scale)]
+    max_length = len(t_stops)
+    ray = Ray(start[0], start[1], start[2],
+              direction[0], direction[1], direction[2])
+    t, t_max = _intersect_node_with_ray(stack[0], ray)
+    t += 1e-5
+    p = _cast_ray(ray, t)
+    stop = 0
+    while stack:
+        current = stack[-1]
+
+        index = np.searchsorted(leaf_index, current.id)
+        if leaf_index[index] == current.id:
+            _, tc_max = _intersect_node_with_ray(current, ray)
+            t_stops[stop] = t
+            leaves[stop] = index
+            t = tc_max + 1e-5
+            p = _cast_ray(ray, t)
+            while _node_contains(current, p):
+                t += 1e-5
+                p = _cast_ray(ray, t)
+
+            stack.pop()
+            stop += 1
+            if t == t_max or stop == max_length:
+                break
+        else:
+            if _node_contains(current, p):
+                child = _find_child_of_node(current, p)
+                stack.append(child)
+            else:
+                stack.pop()
+
+
+@njit(parallel=True)
+def _batch_intersect(scale: float,
+                     leaf_index: np.ndarray,
+                     starts: np.ndarray,
+                     directions: np.ndarray,
+                     max_length: int) -> Path:
+    num_rays = starts.shape[0]
+    t_stops = np.zeros((num_rays, max_length), np.float32)
+    leaves = np.zeros((num_rays, max_length), np.int64)
+    for i in prange(num_rays):
+        _trace_ray_path(scale, leaf_index, starts[i], directions[i],
+                        t_stops[i], leaves[i])
+
+    return Path(t_stops, leaves)
+
+
+def _enumerate_children(node: Node) -> Sequence[Node]:
+    scale = node.scale / 2
+    child_id = (node.id << 3) + 1
+    x0 = node.x - scale
+    y0 = node.y - scale
+    z0 = node.z - scale
+    x1 = node.x + scale
+    y1 = node.y + scale
+    z1 = node.z + scale
+    for i, (x, y, z) in enumerate(product([x0, x1], [y0, y1], [z0, z1])):
+        yield Node(child_id + i, x, y, z, scale)
+
+
+def _leaf_nodes(scale: float, leaf_ids: Set[int]) -> List[Node]:
+    queue = deque([Node(0, 0.0, 0.0, 0.0, scale)])
+    leaves = []
+    while queue:
+        current = queue.popleft()
+        if current.id in leaf_ids:
+            leaves.append(current)
+        else:
+            for child in _enumerate_children(current):
+                queue.append(child)
+
+    return leaves
 
 
 class OcTree:
     """Class representing an OcTree datastructure."""
 
-    class Node(namedtuple("Node", ["id", "scale", "center", "parent"])):
-        """Class representing a node in the OcTree."""
-
-        @property
-        def child_ids(self) -> Sequence[int]:
-            """The ids to use for this node's children."""
-            start = (self.id << 3) + 1
-            return range(start, start + 8)
-
-        def make_children(self) -> Sequence["OcTree.Node"]:
-            """Generates child nodes for this node."""
-            scale = self.scale / 2
-            offset = scale * CORNERS
-            for child, center in zip(self.child_ids, offset):
-                yield OcTree.Node(child, scale, self.center + center, self.id)
-
-        def intersect_ray(self, point: np.ndarray, dir_inv: np.ndarray) -> Tuple[float, float]:
-            """Intersects a ray with the cube this node represents.
-
-            Args:
-                point (np.ndarray): the starting point of the ray
-                dir_inv (np.ndarray): the element-wise recipricol of the
-                                      direction vector
-
-            Returns:
-                (float, float): the start and end t values for the intersection
-            """
-            bounds = np.stack([self.center - self.scale, self.center + self.scale])
-            with np.errstate(invalid="ignore"):
-                t = np.nan_to_num((bounds - point) * dir_inv)
-
-            tc_min = t.min(0).max()
-            tc_max = t.max(0).min()
-            return tc_min, tc_max
-
-        def contains(self, point: np.ndarray) -> bool:
-            """Determines whether this cube contains the specified point.
-
-            Args:
-                point (np.ndarray): the point to test
-
-            Returns:
-                bool: whether the point is contained in the cube
-            """
-            diff = np.abs(point - self.center) <= self.scale
-            return diff.all()
-
-        def find_child(self, point: np.ndarray) -> int:
-            """Finds the id of the child which contains the point.
-
-            Args:
-                point (np.ndarray): the point to test
-
-            Returns:
-                int: the id of the child that contains the point
-            """
-            bits = point >= self.center
-            start = (self.id << 3) + 1
-            return int(start + np.packbits(bits[::-1], bitorder="little")[0])
-
-    def __init__(self, initial_depth: int):
+    def __init__(self, depth: int, scale=1.0):
         """Constructor.
 
         Args:
-            initial_depth (int): the initial depth of the tree.
+            depth (int): the initial depth of the tree.
+            scale (float): the scale of the octree, equal to one-half of a side.
+                           Defaults to 1.0.
         """
-        self.nodes = {
-            0: OcTree.Node(0, 1, np.zeros(3, np.float32), None)
-        }
+        self._scale = float(scale)
 
-        self.leaves: Set[OcTree.Node] = set()
-        self.branches: Set[OcTree.Node] = set()
+        self._leaf_ids = set()
+        self._branch_ids = set()
+        queue = deque([(0, 0)])
+        while queue:
+            current, level = queue.popleft()
+            if level == depth - 2:
+                self._branch_ids.add(current)
+            elif level == depth - 1:
+                self._leaf_ids.add(current)
+                continue
 
-        stack = [(self.nodes[0], 1)]
-
-        while stack:
-            current, depth = stack.pop()
-            for child in current.make_children():
-                self.nodes[child.id] = child
-                if depth == initial_depth - 1:
-                    self.leaves.add(child.id)
-                else:
-                    stack.append((child, depth + 1))
-                    if depth == initial_depth - 2:
-                        self.branches.add(child.id)
-
-        self._update_tensors()
+            child_start = (current << 3) + 1
+            child_end = child_start + 8
+            for child_id in range(child_start, child_end):
+                queue.append((child_id, level + 1))
 
     def leaf_centers(self) -> np.ndarray:
         """The Nx3 center coordinates of all leaves."""
-        return np.stack([self.nodes[i].center for i in sorted(self.leaves)])
+        leaves = _leaf_nodes(self._scale, self._leaf_ids)
+        leaf_centers = [[leaf.x, leaf.y, leaf.z] for leaf in leaves]
+        return np.array(leaf_centers, np.float32)
 
     def leaf_scales(self) -> np.ndarray:
         """The N scale values for all leaves."""
-        return np.stack([self.nodes[i].scale for i in sorted(self.leaves)])
+        leaves = _leaf_nodes(self._scale, self._leaf_ids)
+        leaf_scales = [leaf.scale for leaf in leaves]
+        return np.array(leaf_scales, np.float32)
 
     def _split(self, leaf_id: int):
-        current = self.nodes[leaf_id]
-        for child in current.make_children():
-            self.nodes[child.id] = child
-            self.leaves.add(child.id)
+        self._leaf_ids.remove(leaf_id)
+        self._branch_ids.add(leaf_id)
+        parent_id = (leaf_id - 1) >> 3
+        if parent_id in self._branch_ids:
+            self._branch_ids.remove(parent_id)
 
-        self.leaves.remove(leaf_id)
-        if current.parent in self.branches:
-            self.branches.remove(current.parent)
-
-        self.branches.add(leaf_id)
+        leaf_start = (leaf_id << 3) + 1
+        leaf_end = leaf_start + 8
+        for i in range(leaf_start, leaf_end):
+            self._leaf_ids.add(i)
 
     def _merge(self, branch_id: int):
-        current = self.nodes[branch_id]
-        for child_id in current.child_ids:
-            del self.nodes[child_id]
-            self.leaves.remove(child_id)
+        self._branch_ids.remove(branch_id)
+        self._leaf_ids.add(branch_id)
+        leaf_start = (branch_id << 3) + 1
+        leaf_end = leaf_start + 8
+        for i in range(leaf_start, leaf_end):
+            self._leaf_ids.remove(i)
 
-        self.leaves.add(branch_id)
+    def __len__(self):
+        """Counts all the nodes in the tree."""
+        num_nodes = 0
+        stack = [0]
+        while stack:
+            current = stack.pop()
+            num_nodes += 1
+            if current in self._leaf_ids:
+                continue
 
-    def _update_tensors(self):
-        self._node_index = np.array(list(self.nodes.keys()), np.int64)
-        self._node_index.sort()
+            child_start = (current << 3) + 1
+            child_end = child_start + 8
+            for child_id in range(child_start, child_end):
+                stack.append(child_id)
 
-        self._node_leaves = np.array(list(self.leaves), np.int64)
-        self._node_leaves.sort()
+        return num_nodes
 
-        node_centers = [self.nodes[i].center for i in self._node_index]
-        self._node_centers = np.stack(node_centers)
-
-        node_scales = [self.nodes[i].scale for i in self._node_index]
-        self._node_scales = np.stack(node_scales).reshape(-1, 1)
-
-        self._node_bounds = np.stack([self._node_centers - self._node_scales,
-                                      self._node_centers + self._node_scales], 1)
+    @property
+    def num_leaves(self) -> int:
+        """Counts the number of leaves in the tree."""
+        return len(self._leaf_ids)
 
     def merge(self, leaf_values: np.ndarray, threshold: float) -> np.ndarray:
         """Merges nodes using the values provided.
@@ -165,16 +295,16 @@ class OcTree:
         leaf_opacity = {}
         branch_opacity = {}
 
-        for leaf_id, value in zip(sorted(self.leaves), leaf_values):
-            leaf = self.nodes[leaf_id]
+        for leaf_id, value in zip(sorted(self._leaf_ids), leaf_values):
+            parent_id = (leaf_id - 1) >> 3
             leaf_opacity[leaf_id] = value
-            if leaf.parent not in branch_opacity:
-                branch_opacity[leaf.parent] = 0
+            if parent_id not in branch_opacity:
+                branch_opacity[parent_id] = 0
 
-            branch_opacity[leaf.parent] += value / 8
+            branch_opacity[parent_id] += value / 8
 
         # sort branches by uncertainty (least to most certain)
-        branch_ids = list(sorted(self.branches))
+        branch_ids = list(sorted(self._branch_ids))
         branch_values = np.array([branch_opacity[i] for i in branch_ids])
         branch_values = np.abs(branch_values - 0.5)
         sorted_branch_ids = np.argsort(branch_values)
@@ -187,11 +317,11 @@ class OcTree:
         for branch_id in sorted_branch_ids[:num_merge]:
             self._merge(branch_id)
 
-        print("Num nodes:", len(self.nodes))
+        print("Num nodes:", len(self))
 
         # compute the updated opacity values
         opacity = []
-        for leaf_id in sorted(self.leaves):
+        for leaf_id in sorted(self._leaf_ids):
             if leaf_id in leaf_opacity:
                 opacity.append(leaf_opacity[leaf_id])
             elif leaf_id in branch_opacity:
@@ -201,33 +331,33 @@ class OcTree:
 
         # this is necessary as some nodes may have had
         # all of their branch children merged
-        self.branches.clear()
-        for node in self.nodes.values():
-            if node.id in self.leaves:
-                continue
-
+        self._branch_ids.clear()
+        queue = deque([0])
+        while queue:
+            current = queue.popleft()
+            child_start = (current << 3) + 1
+            child_end = child_start + 8
             is_branch = True
-            for child_id in node.child_ids:
-                if child_id not in self.leaves:
+            for child_id in range(child_start, child_end):
+                if child_id not in self._leaf_ids:
                     is_branch = False
-                    break
+                    queue.append(child_id)
 
             if is_branch:
-                self.branches.add(node.id)
+                self._branch_ids.add(current)
 
-        self._update_tensors()
         return np.array(opacity, np.float32)
 
     def split(self, leaf_values: np.ndarray, threshold: float, max_nodes: int) -> np.ndarray:
         """Splits nodes using the values provided.
 
         Description:
-            This method will determine which nodes are most uncertain, that is
-            having a value close to 0.5, and then splits them until the
-            maximum number of nodes is reached.
+            This method will determine which nodes are most uncertain to be
+            opaque, that is having a value close to 0.5, and then splits them
+            until the maximum number of nodes is reached.
 
         Args:
-            leaf_values: the values used for splitting the leaves (0-1)
+            leaf_values: the opacity values used for splitting the leaves (0-1)
             threshold: the threshold used to determine split candidates
             max_nodes: maximum number of nodes in the tree
 
@@ -236,7 +366,7 @@ class OcTree:
         """
         leaf_opacity = {}
 
-        leaf_ids = list(sorted(self.leaves))
+        leaf_ids = list(sorted(self._leaf_ids))
         for leaf_id, value in zip(leaf_ids, leaf_values):
             leaf_opacity[leaf_id] = value
 
@@ -245,204 +375,53 @@ class OcTree:
         sorted_leaf_ids = np.argsort(leaf_values)
         sorted_leaf_ids = [leaf_ids[idx] for idx in sorted_leaf_ids]
 
-        # determine how many merges we can make while
+        # determine how many splits we can make
         num_split = (leaf_values < threshold).sum()
-        budget = (max_nodes - len(self.nodes)) // 8
+        budget = (max_nodes - len(self)) // 8
         num_split = min(num_split, budget)
 
         print("Performing", num_split, "splits")
         for leaf_id in sorted_leaf_ids[:num_split]:
             self._split(leaf_id)
 
-        print("Num nodes:", len(self.nodes))
+        print("Num nodes:", len(self))
 
         # compute the updated opacity values
         opacity = []
-        for leaf_id in sorted(self.leaves):
-            leaf = self.nodes[leaf_id]
+        for leaf_id in sorted(self._leaf_ids):
+            parent_id = (leaf_id - 1) >> 3
             if leaf_id in leaf_opacity:
                 opacity.append(leaf_opacity[leaf_id])
-            elif leaf.parent in leaf_opacity:
-                opacity.append(leaf_opacity[leaf.parent])
+            elif parent_id in leaf_opacity:
+                opacity.append(leaf_opacity[parent_id])
             else:
                 raise KeyError()
 
-        self._update_tensors()
         return np.array(opacity, np.float32)
 
-    def save(self, path: str):
-        """Saves the Octree to the specified path."""
-        ids = []
-        scales = []
-        centers = []
-        parents = []
-        for node in self.nodes.values():
-            ids.append(node.id)
-            scales.append(node.scale)
-            centers.append(node.center)
-            parents.append(node.parent)
-
-        np.savez(path,
-                 ids=ids,
-                 scales=scales,
-                 centers=centers,
-                 parents=parents)
-
-    def load(self, path: str):
-        """Loads the Octree from the specified path."""
-        data = np.load(path)
-        result = OcTree(0)
-        node_ids = data["ids"]
-        scales = data["scales"]
-        centers = data["centers"]
-        parents = data["parents"]
-        for node_id, scale, center, parent in zip(node_ids, scales, centers, parents):
-            result.nodes[id] = OcTree.Node(node_id, scale, center, parent)
-
-    @staticmethod
-    def _batch_intersect(bounds: np.ndarray,
-                         points: np.ndarray,
-                         dirs_inv: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        with np.errstate(invalid="ignore"):
-            t = np.nan_to_num((bounds - points[:, np.newaxis, :]) * dirs_inv[:, np.newaxis, :])
-
-        tc_min = t.min(1).max(-1)
-        tc_max = t.max(1).min(-1)
-        return tc_min, tc_max
-
-    @staticmethod
-    def _batch_contains(centers: np.ndarray,
-                        scales: np.ndarray,
-                        points: np.ndarray) -> np.ndarray:
-        diff = np.abs(points - centers) <= scales
-        return diff.all(-1)
-
-    @staticmethod
-    def _batch_find_child(centers: np.ndarray,
-                          node_ids: np.ndarray,
-                          points: np.ndarray) -> np.ndarray:
-        bits = points >= centers
-        starts = (node_ids << 3) + 1
-        return starts + np.packbits(bits[:, ::-1], axis=-1, bitorder="little").reshape(-1)
-
-    class BatchVoxels(namedtuple("BatchVoxels", ["t_stops", "nodes", "leaf_index"])):
-        """Results from batch intersection processing.
-
-        Description:
-            Consists of the results from batch ray intersection processing. Each
-            tensor is NxR, where N is the maximum number of steps taken through
-            the tree and R is the number of rays.
-
-            `t_stops` consists of the t values (per ray) at each step as the
-            rays move through the tree.
-
-            `nodes` contains the node ids each ray visits on its path through
-            the tree. -1 indicates the ray has left the tree.
-
-            `leaf_index` contains the index into the sorted leaf order (i.e.
-            the same order as `leaf_centers`, `leaf_scales`, and `leaves)
-            for each leaf visited. -1 indicates the node is not a leaf.
-        """
-
-    def batch_intersect(self,
-                        points: np.ndarray,
-                        directions: np.ndarray) -> "OcTree.BatchVoxels":
-        """Intersects multiple rays with the Octree.
-
-        Args:
-            points (np.ndarray): the ray starting points
-            directions (np.ndarray): the ray directions
-
-        Returns:
-            BatchVoxels: the intersection results. See BatchVoxels for details.
-        """
-        with np.errstate(divide="ignore", invalid="ignore"):
-            dirs_inv = np.reciprocal(directions)
-
-        current_node_ids = np.zeros(len(points), np.int64)
-        t_stops = []
-        node_stops = []
-        leaf_stops = []
-        t, t_max = self._batch_intersect(self._node_bounds[current_node_ids], points, dirs_inv)
-        t += 1e-5
-        while (t < t_max).any():
-            current_index = self._node_index.searchsorted(current_node_ids)
-            centers = self._node_centers[current_index]
-            scales = self._node_scales[current_index]
-            bounds = self._node_bounds[current_index]
-
-            leaf_index = self._node_leaves.searchsorted(current_node_ids)
-            is_leaf = self._node_leaves[leaf_index] == current_node_ids
-            leaf_index = np.where(is_leaf, leaf_index, -1)
-            if is_leaf.any():
-                leaf_stops.append(leaf_index.copy())
-                t_stops.append(t.copy())
-                node_stops.append(current_node_ids.copy())
-
-            p = points + t[:, np.newaxis] * directions
-            child_ids = self._batch_find_child(centers, current_node_ids, p)
-            parent_ids = (current_node_ids - 1) >> 3
-            contains = self._batch_contains(centers, scales, p)
-
-            # if is_leaf:
-            #   t = tc_max + 1e-5
-            # else:
-            #   t = t
-            _, tc_max = self._batch_intersect(bounds, points, dirs_inv)
-            t = np.where(is_leaf, tc_max + 1e-5, t)
-
-            # if is_leaf:
-            #   id = parent
-            # else:
-            #   if contains(point):
-            #       id = child
-            #   else:
-            #       id = parent
-            #
-            current_node_ids = np.where(contains & (~is_leaf), child_ids, parent_ids)
-
-        return OcTree.BatchVoxels(np.stack(t_stops), np.stack(node_stops), np.stack(leaf_stops))
-
-    Voxel = namedtuple("Voxel", ["t", "id"])
-
-    def intersect(self, point: np.ndarray, direction: np.ndarray) -> List["OcTree.Voxel"]:
+    def intersect(self, starts: np.ndarray, directions: np.ndarray,
+                  max_length: int) -> Path:
         """Intersects a ray with the tree.
 
         Args:
-            point (np.ndarray): the starting point of the ray
-            direction (np.ndarray): the direction of the ray
+            starts (np.ndarray): the starting points of the rays
+            directions (np.ndarray): the directions of the rays
 
         Returns:
             List[Voxel]: A list of (t, id) leaf voxels visited.
         """
-        with np.errstate(divide="ignore", invalid="ignore"):
-            dir_inv = np.reciprocal(direction)
+        assert starts.shape[-1] == 3
+        assert directions.shape[-1] == 3
+        assert len(starts.shape) <= 2
+        assert len(directions.shape) <= 2
+        assert len(starts.shape) == len(directions.shape)
 
-        stack = [self.nodes[0]]
-        stops = []
-        t, t_max = stack[0].intersect_ray(point, dir_inv)
-        t += 1e-5
-        p = point + t * direction
-        while stack:
-            current = stack[-1]
+        if len(starts.shape) == 1:
+            starts = starts.reshape(1, 3)
+            directions = directions.reshape(1, 3)
 
-            if current.id in self.leaves:
-                _, tc_max = current.intersect_ray(point, dir_inv)
-                stops.append((t, current.id))
-                t = tc_max + 1e-5
-                p = point + direction * t
-                while current.contains(p):
-                    t += 1e-5
-                    p = point + direction * t
-
-                stack.pop()
-                if t == t_max:
-                    break
-            else:
-                if current.contains(p):
-                    child_id = current.find_child(point + direction * t)
-                    stack.append(self.nodes[child_id])
-                else:
-                    stack.pop()
-
-        return stops
+        leaf_index = list(sorted(self._leaf_ids))
+        leaf_index = np.array(leaf_index)
+        path = _batch_intersect(self._scale, leaf_index, starts, directions, max_length)
+        _batch_intersect.parallel_diagnostics(level=4)
+        return path

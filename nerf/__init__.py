@@ -17,6 +17,7 @@ __all__ = ["CameraInfo",
            "BasicFourierMLP",
            "PositionalFourierMLP",
            "GaussianFourierMLP",
+           "NumbaOcTree",
            "OcTree",
            "PixelDataset",
            "Triangulation"]
