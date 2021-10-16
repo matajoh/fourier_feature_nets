@@ -44,21 +44,19 @@ class Occupancy(nn.Module):
         leaves = []
         deltas = []
         points = []
-        max_dist = np.zeros((1, len(positions)), dtype=np.float32)
+        max_dist = np.zeros((len(positions), 1), dtype=np.float32)
         max_dist[:] = 1e10
         print("Casting rays...")
         for camera in self.cameras:
             print(camera.name)
             cam_points = camera.project(positions)
             starts, dirs = camera.raycast(cam_points)
-            time = timeit.timeit(lambda: self.voxels.intersect(starts, dirs), number=3)
-            print("Best of 3:", time, "s")
-            #voxels = self.voxels.batch_intersect(starts, dirs)
-            #cam_deltas = voxels.t_stops[1:] - voxels.t_stops[:-1]
-            #cam_deltas = np.concatenate([cam_deltas, max_dist])
-            #deltas.append(cam_deltas.T)
-            #leaves.append(voxels.leaf_index.T)
-            #points.append(torch.from_numpy(cam_points))
+            voxels = self.voxels.intersect(starts, dirs, 50)
+            cam_deltas = voxels.t_stops[:, 1:] - voxels.t_stops[:, :-1]
+            cam_deltas = np.concatenate([cam_deltas, max_dist], axis=-1)
+            deltas.append(cam_deltas)
+            leaves.append(voxels.leaves)
+            points.append(torch.from_numpy(cam_points))
 
         device = self.images.device
         leaves = [torch.from_numpy(x).to(device) for x in leaves]

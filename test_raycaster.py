@@ -36,8 +36,9 @@ def _test_cameras() -> List[CameraInfo]:
 def _main():
     cameras = _test_cameras()
 
+    np.random.seed(20080524)
+
     voxels = OcTree(4)
-    positions = voxels.leaf_centers()
     opacity = np.random.uniform(0, 1, voxels.num_leaves)
     voxels.split(opacity, 0.1, 4096)
     opacity = np.random.uniform(0, 1, voxels.num_leaves)
@@ -46,8 +47,10 @@ def _main():
     voxels.split(opacity, 0.1, 4096)
     positions = voxels.leaf_centers()
     scales = voxels.leaf_scales()
+    leaf_ids = list(sorted(voxels._leaf_ids))
 
-    pos_per_camera = 10
+    pos_per_camera = 100
+    num_steps = 30
     pos_index = np.arange(len(positions))
     np.random.shuffle(pos_index)
     pos_index = pos_index[:pos_per_camera*len(cameras)]
@@ -56,24 +59,38 @@ def _main():
     canvas = scene.create_canvas_3d(width=600, height=600)
 
     voxel_mesh = scene.create_mesh(layer_id="voxels")
-    for pos, scale in zip(positions, scales):
+    for pos, scale, leaf_id in zip(positions, scales, leaf_ids):
         transform = sp.Transforms.translate(pos) @ sp.Transforms.scale(scale * 2)
         voxel_mesh.add_cube(sp.Colors.White, transform=transform,
                             fill_triangles=False, add_wireframe=True)
 
-    cmap = get_cmap("jet")
-    colors = cmap(np.linspace(0, 1, len(pos_index)))[:, :3]
+    starts = []
+    directions = []
     for start in range(0, len(pos_index), pos_per_camera):
         end = min(start + pos_per_camera, len(pos_index))
         camera = cameras[start // pos_per_camera]
         camera_pos = pos_index[start:end]
         points = camera.project(positions[camera_pos])
+        cam_starts, cam_directions = camera.raycast(points)
+        starts.append(cam_starts)
+        directions.append(cam_directions)
+
+    starts = np.concatenate(starts)
+    directions = np.concatenate(directions)
+    t_stops, leaves = voxels.intersect(starts, directions, num_steps)
+
+    time_taken = timeit.timeit(lambda: voxels.intersect(starts, directions, num_steps), number=3)
+    print("Best of 3:", time_taken, "s")
+
+
+    cmap = get_cmap("jet")
+    colors = cmap(np.linspace(0, 1, len(pos_index)))[:, :3]
+    for start in range(0, len(pos_index), pos_per_camera):
+        end = min(start + pos_per_camera, len(pos_index) - 1)
+        camera_pos = pos_index[start:end]
+        camera = cameras[start // pos_per_camera]
+        points = camera.project(positions[camera_pos])
         starts, dirs = camera.raycast(points)
-
-        time_taken = timeit.timeit(lambda: voxels.intersect(starts, dirs, 10), number=3)
-        print("Best of 3:", time_taken, "s")
-
-        ray_paths = voxels.intersect(starts, dirs, 10)
 
         camera_mesh = scene.create_mesh(layer_id="cameras")
         sp_camera = camera.to_scenepic()
@@ -83,16 +100,20 @@ def _main():
             ray_voxel_mesh = scene.create_mesh(layer_id="ray_voxels")
             ray_mesh = scene.create_mesh(layer_id="rays")
             t_last = 0.85
-            for t, leaf in ray_paths[i]:
-                voxel_transform = sp.Transforms.scale(2 * scales[leaf])
-                voxel_transform = sp.Transforms.translate(positions[leaf]) @ voxel_transform
-                ray_voxel_mesh.add_cube(color, transform=voxel_transform)
+            for t, leaf in zip(t_stops[start + i], leaves[start + i]):
                 p0 = starts[i] + t_last * dirs[i]
                 p1 = starts[i] + t * dirs[i]
                 ray_mesh.add_thickline(sp.Colors.Magenta, p0, p1,
                                        start_thickness=0.02, end_thickness=0.02)
                 t_last = t
 
+                if leaf < 0:
+                    break
+
+                voxel_transform = sp.Transforms.scale(2 * scales[leaf])
+                voxel_transform = sp.Transforms.translate(positions[leaf]) @ voxel_transform
+                ray_voxel_mesh.add_cube(color, transform=voxel_transform)
+    
             frame = canvas.create_frame()
             frame.camera = sp_camera
             frame.add_mesh(ray_voxel_mesh)

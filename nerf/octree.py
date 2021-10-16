@@ -2,164 +2,169 @@
 
 from collections import deque, namedtuple
 from itertools import product
-from typing import List, Sequence, Set
+from typing import List, Sequence, Set, Tuple
 
-from numba import njit, prange
+from numba import njit
 import numpy as np
 
 
-Vector = namedtuple("Vector", ["x", "y", "z"])
 Node = namedtuple("Node", ["id", "x", "y", "z", "scale"])
-Ray = namedtuple("Ray", ["x", "y", "z", "dx", "dy", "dz"])
-Intersection = namedtuple("Intersection", ["t_min", "t_max"])
 Path = namedtuple("Path", ["t_stops", "leaves"])
 
 
 @njit
-def _intersect_node_with_ray(node: Node, ray: Ray) -> Intersection:
-    dx = node.x - ray.x
-    dy = node.y - ray.y
-    dz = node.z - ray.z
-    x0 = (dx - node.scale) / ray.dx
-    y0 = (dy - node.scale) / ray.dy
-    z0 = (dz - node.scale) / ray.dz
-    x1 = (dx + node.scale) / ray.dx
-    y1 = (dy + node.scale) / ray.dy
-    z1 = (dz + node.scale) / ray.dz
+def _intersect_near(centers: np.ndarray,
+                    scales: np.ndarray,
+                    starts: np.ndarray,
+                    dirs_inv: np.ndarray) -> np.ndarray:
+    diffs = centers - starts
+    min_bound = (diffs - scales) * dirs_inv
+    max_bound = (diffs + scales) * dirs_inv
 
-    if x1 < x0:
-        tmp = x0
-        x0 = x1
-        x1 = tmp
+    tc_min = np.where(min_bound < max_bound, min_bound, max_bound)
+    tc_x = tc_min[:, 0]
+    tc_y = tc_min[:, 1]
+    tc_z = tc_min[:, 2]
+    tc = np.where(tc_x > tc_y, tc_x, tc_y)
+    tc = np.where(tc > tc_z, tc, tc_z)
 
-    if y1 < y0:
-        tmp = y0
-        y0 = y1
-        y1 = tmp
-
-    if z1 < z0:
-        tmp = z0
-        z0 = z1
-        z1 = tmp
-
-    return Intersection(max(x0, y0, z0), min(x1, y1, z1))
+    return tc
 
 
 @njit
-def _cast_ray(ray: Ray, t: float) -> Vector:
-    x = ray.x + t * ray.dx
-    y = ray.y + t * ray.dy
-    z = ray.z + t * ray.dz
-    return Vector(x, y, z)
+def _intersect_far(centers: np.ndarray,
+                   scales: np.ndarray,
+                   starts: np.ndarray,
+                   dirs_inv: np.ndarray) -> np.ndarray:
+    diffs = centers - starts
+    min_bound = (diffs - scales) * dirs_inv
+    max_bound = (diffs + scales) * dirs_inv
+
+    tc_max = np.where(min_bound > max_bound, min_bound, max_bound)
+    tc_x = tc_max[:, 0]
+    tc_y = tc_max[:, 1]
+    tc_z = tc_max[:, 2]
+    tc = np.where(tc_x < tc_y, tc_x, tc_y)
+    tc = np.where(tc < tc_z, tc, tc_z)
+
+    return tc
 
 
 @njit
-def _node_contains(node: Node, point: Vector) -> bool:
-    dx = abs(node.x - point.x)
-    dy = abs(node.y - point.y)
-    dz = abs(node.z - point.z)
-    return not (dx > node.scale or dy > node.scale or dz > node.scale)
+def _contains(centers: np.ndarray,
+              scales: np.ndarray,
+              points: np.ndarray) -> np.ndarray:
+    diff = np.abs(points - centers) > scales
+    diff_x = diff[:, 0]
+    diff_y = diff[:, 1]
+    diff_z = diff[:, 2]
+    diff = diff_x | diff_y | diff_z
+    return np.logical_not(diff)
 
 
 @njit
-def _find_child_of_node(node: Node, point: Vector) -> Node:
-    scale = node.scale / 2
-    child_id = (node.id << 3) + 1
-    if point.x < node.x:
-        x = node.x - scale
-        if point.y < node.y:
-            y = node.y - scale
-            if point.z < node.z:
-                z = node.z - scale
-                return Node(child_id, x, y, z, scale)
-            else:
-                z = node.z + scale
-                child_id += 1
-                return Node(child_id, x, y, z, scale)
-        else:
-            y = node.y + scale
-            child_id += 2
-            if point.z < node.z:
-                z = node.z - scale
-                return Node(child_id, x, y, z, scale)
-            else:
-                z = node.z + scale
-                child_id += 1
-                return Node(child_id, x, y, z, scale)
-    else:
-        x = node.x + scale
-        child_id += 4
-        if point.y < node.y:
-            y = node.y - scale
-            if point.z < node.z:
-                z = node.z - scale
-                return Node(child_id, x, y, z, scale)
-            else:
-                z = node.z + scale
-                child_id += 1
-                return Node(child_id, x, y, z, scale)
-        else:
-            y = node.y + scale
-            child_id += 2
-            if point.z < node.z:
-                z = node.z - scale
-                return Node(child_id, x, y, z, scale)
-            else:
-                z = node.z + scale
-                child_id += 1
-                return Node(child_id, x, y, z, scale)
+def _find_child(centers: np.ndarray,
+                scales: np.ndarray,
+                node_ids: np.ndarray,
+                points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    signs = np.sign(points - centers)
+    child_centers = centers + (signs * scales * 0.5).astype(np.float32)
+    bits = signs > 0
+    starts = (node_ids << 3) + 1
+    child_ids = (bits[:, 0] << 2) + (bits[:, 1] << 1) + bits[:, 2] + starts
+    return child_ids, child_centers
 
 
 @njit
-def _trace_ray_path(scale: float, leaf_index: np.ndarray,
-                    start: np.ndarray, direction: np.ndarray,
-                    t_stops: np.ndarray, leaves: np.ndarray) -> Path:
-    stack = [Node(0, 0.0, 0.0, 0.0, scale)]
-    max_length = len(t_stops)
-    ray = Ray(start[0], start[1], start[2],
-              direction[0], direction[1], direction[2])
-    t, t_max = _intersect_node_with_ray(stack[0], ray)
-    t += 1e-5
-    p = _cast_ray(ray, t)
-    stop = 0
-    while stack:
-        current = stack[-1]
-
-        index = np.searchsorted(leaf_index, current.id)
-        if leaf_index[index] == current.id:
-            _, tc_max = _intersect_node_with_ray(current, ray)
-            t_stops[stop] = t
-            leaves[stop] = index
-            t = tc_max + 1e-5
-            p = _cast_ray(ray, t)
-            while _node_contains(current, p):
-                t += 1e-5
-                p = _cast_ray(ray, t)
-
-            stack.pop()
-            stop += 1
-            if t == t_max or stop == max_length:
-                break
-        else:
-            if _node_contains(current, p):
-                child = _find_child_of_node(current, p)
-                stack.append(child)
-            else:
-                stack.pop()
+def _find_parent(centers: np.ndarray,
+                 scales: np.ndarray,
+                 node_ids: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    parent_ids = (node_ids - 1) >> 3
+    starts = (parent_ids << 3) + 1
+    child_ids = (node_ids - starts).astype(np.uint8)
+    bits = np.zeros((len(starts), 3), np.uint8)
+    bits[:, 0] = (child_ids & 4) >> 2
+    bits[:, 1] = (child_ids & 2) >> 1
+    bits[:, 2] = (child_ids & 1)
+    signs = np.where(bits, 1, -1).astype(np.float32)
+    parent_centers = centers - (signs * scales)
+    return parent_ids, parent_centers
 
 
-@njit(parallel=True)
+@njit
 def _batch_intersect(scale: float,
                      leaf_index: np.ndarray,
                      starts: np.ndarray,
                      directions: np.ndarray,
-                     max_length: int) -> Path:
-    num_rays = starts.shape[0]
+                     max_length: int,
+                     epsilon=1e-8) -> Path:
+
+    directions = np.where(np.abs(directions) < epsilon,
+                          np.full_like(directions, epsilon),
+                          directions)
+    dirs_inv = np.reciprocal(directions)
+
+    num_rays = len(starts)
+    current_node_ids = np.zeros(num_rays, np.int64)
+    current_index = np.zeros(num_rays, np.int64)
+    current_centers = np.zeros((num_rays, 3), np.float32)
+    current_scales = np.full(num_rays, scale, np.float32)
     t_stops = np.zeros((num_rays, max_length), np.float32)
     leaves = np.zeros((num_rays, max_length), np.int64)
-    for i in prange(num_rays):
-        _trace_ray_path(scale, leaf_index, starts[i], directions[i],
-                        t_stops[i], leaves[i])
+    t = _intersect_near(current_centers, current_scales.reshape(-1, 1), starts, dirs_inv)
+    t_max = _intersect_far(current_centers, current_scales.reshape(-1, 1), starts, dirs_inv)
+    t += 1e-5
+    in_progress = current_index < max_length - 1
+    points = starts + t.reshape(-1, 1) * directions
+    while in_progress.any():
+        current_leaves = np.searchsorted(leaf_index, current_node_ids)
+        is_leaf = leaf_index[current_leaves] == current_node_ids
+        not_leaf = np.logical_not(is_leaf)
+        contains = _contains(current_centers, current_scales.reshape(-1, 1), points)
+
+        tc_max = _intersect_far(current_centers[is_leaf],
+                                current_scales[is_leaf].reshape(-1, 1),
+                                starts[is_leaf],
+                                dirs_inv[is_leaf])
+
+        tc_max += 1e-5
+        ray_idx = np.nonzero(is_leaf)[0]
+        for ray, tc in zip(ray_idx, tc_max):
+            idx = current_index[ray]
+            t_stops[ray, idx] = t[ray]
+            leaves[ray, idx] = current_leaves[ray]
+            t[ray] = tc + 1e-5
+
+        current_index = np.where(is_leaf & in_progress, current_index + 1, current_index)
+        points = starts + t.reshape(-1, 1) * directions
+
+        in_progress = (current_index < max_length - 1) & (t < t_max)
+        push = contains & not_leaf
+        pop = np.logical_not(push)
+        push = push & in_progress
+        pop = pop & in_progress
+
+        child_ids, child_centers = _find_child(current_centers,
+                                               current_scales.reshape(-1, 1),
+                                               current_node_ids,
+                                               points)
+
+        parent_ids, parent_centers = _find_parent(current_centers,
+                                                  current_scales.reshape(-1, 1),
+                                                  current_node_ids[:])
+
+        current_node_ids = np.where(push, child_ids, current_node_ids)
+        current_node_ids = np.where(pop, parent_ids, current_node_ids)
+        current_scales = np.where(push, current_scales / 2, current_scales)
+        current_scales = np.where(pop, current_scales * 2, current_scales)
+        push = np.repeat(push, 3).reshape(-1, 3)
+        pop = np.repeat(pop, 3).reshape(-1, 3)
+        current_centers = np.where(push, child_centers, current_centers)
+        current_centers = np.where(pop, parent_centers, current_centers)
+
+    for i, end in enumerate(current_index):
+        t_stops[i, end:] = t_max[i]
+        leaves[i, end:] = -1
 
     return Path(t_stops, leaves)
 
@@ -420,8 +425,9 @@ class OcTree:
             starts = starts.reshape(1, 3)
             directions = directions.reshape(1, 3)
 
+        starts = starts.astype(np.float32)
+        directions = directions.astype(np.float32)
         leaf_index = list(sorted(self._leaf_ids))
-        leaf_index = np.array(leaf_index)
+        leaf_index = np.array(leaf_index, np.int64)
         path = _batch_intersect(self._scale, leaf_index, starts, directions, max_length)
-        _batch_intersect.parallel_diagnostics(level=4)
         return path
