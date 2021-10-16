@@ -1,7 +1,8 @@
 """Module created for [my NeRF lecture]."""
 
 from .camera_info import CameraInfo
-from .dataset import PixelDataset
+from .dataset import PixelDataset, VoxelDataset
+from .fast_octree import FastOcTree
 from .models import (
     BasicFourierMLP,
     GaussianFourierMLP,
@@ -17,7 +18,8 @@ __all__ = ["CameraInfo",
            "BasicFourierMLP",
            "PositionalFourierMLP",
            "GaussianFourierMLP",
-           "NumbaOcTree",
+           "FastOcTree",
            "OcTree",
            "PixelDataset",
+           "VoxelDataset",
            "Triangulation"]

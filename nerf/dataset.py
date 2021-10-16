@@ -2,10 +2,16 @@
 
 from collections import namedtuple
 import math
+from typing import List
+import time
 
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
+from torch.utils.data import TensorDataset
+from .camera_info import CameraInfo
+from .octree import OcTree
 
 
 class PixelData(namedtuple("PixelData", ["uv", "color"])):
@@ -157,3 +163,47 @@ class PixelDataset:
         """
         mse = torch.square(255 * (colors - self.val_color)).mean().item()
         return 20 * math.log10(255) - 10 * math.log10(mse)
+
+
+class VoxelDataset(TensorDataset):
+    def __init__(self, masks: np.ndarray, cameras: List[CameraInfo],
+                 voxels: OcTree, max_length: int, resolution: int):
+        if masks.dtype == np.uint8:
+            masks = masks.astype(np.float32) / 255
+
+        self.masks = torch.from_numpy(masks)
+        self.masks = self.masks.unsqueeze(1)
+
+        print("Casting rays...")
+        x_vals = np.linspace(-1, 1, resolution)
+        y_vals = np.linspace(-1, 1, resolution)
+        points = np.stack(np.meshgrid(x_vals, y_vals), -1).reshape(1, -1, 2)
+        points = points.astype(np.float32)
+        start = time.time()
+        t_stops = []
+        leaves = []
+        for camera in cameras:
+            print(camera.name)
+            starts, directions = camera.raycast(points)
+            path = voxels.intersect(starts, directions, max_length)
+            t_stops.append(path.t_stops)
+            leaves.append(path.leaves)
+
+        points = torch.from_numpy(points)
+        points = points.expand(len(cameras), -1, -1)
+        points = points.unsqueeze(-2)
+        occupancy = F.grid_sample(self.masks, points, align_corners=False,
+                                  padding_mode="zeros")
+        occupancy = occupancy.reshape(-1)
+
+        t_stops = np.concatenate(t_stops)
+        t_stops = torch.from_numpy(t_stops)
+
+        leaves = np.concatenate(leaves)
+        leaves = torch.from_numpy(leaves)
+
+        passed = time.time() - start
+        num_rays = len(t_stops)
+        print(passed, "elapsed,", num_rays, "rays at", passed / num_rays, "s/ray")
+
+        TensorDataset.__init__(self, t_stops, leaves, occupancy)

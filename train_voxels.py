@@ -1,151 +1,137 @@
 import argparse
+from collections import namedtuple
 import json
 import math
 import os
-import timeit
+import sys
 from typing import List
 
 import cv2
 from matplotlib.pyplot import get_cmap
-from nerf import CameraInfo, OcTree
+from nerf import CameraInfo, OcTree, VoxelDataset
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torch.utils.data import DataLoader
 import torch.optim
 import scenepic as sp
 
 
-class Occupancy(nn.Module):
-    def __init__(self, cameras: List[CameraInfo], images: np.ndarray, num_levels: int, max_voxels: int, scale: float):
+class VolumeCarver(nn.Module):
+    def __init__(self, depth: int, scale: float, path_length: int,
+                 image_dir: str, blob_prior_weight: float, resolution: int):
         nn.Module.__init__(self)
-        self.voxels = OcTree(num_levels, scale)
-        self._max_voxels = max_voxels
-        
-        positions = self.voxels.leaf_centers()
-        positions = torch.from_numpy(positions)
-        self.positions = nn.Parameter(positions, requires_grad=False)
+        self.voxels = OcTree(depth, scale)
+        print(depth, len(self.voxels))
+        self._path_length = path_length
+        self._image_dir = image_dir
+        self._blob_prior_weight = blob_prior_weight
+        self._resolution = resolution
+        if not os.path.exists(image_dir):
+            os.makedirs(image_dir)
 
-        images = torch.from_numpy(images)
-        self.images = nn.Parameter(images, requires_grad=False)
+        logits = torch.full((self.voxels.num_leaves,), -10.0, dtype=torch.float32)
+        self.logits = nn.Parameter(logits)
 
-        self.cameras = cameras
-        self.num_cameras = len(cameras)
-
-        opacity = torch.zeros(len(positions), dtype=torch.float32)
-        self.opacity = nn.Parameter(opacity)
-
-        self._update_rays()
+        self._blob_prior = nn.Parameter(self._compute_distance_weights())
 
         self.log = []
 
-    def _update_rays(self):
-        positions = self.positions.cpu().numpy()
-        leaves = []
-        deltas = []
-        points = []
-        max_dist = np.zeros((len(positions), 1), dtype=np.float32)
-        max_dist[:] = 1e10
-        print("Casting rays...")
-        for camera in self.cameras:
-            print(camera.name)
-            cam_points = camera.project(positions)
-            starts, dirs = camera.raycast(cam_points)
-            voxels = self.voxels.intersect(starts, dirs, 50)
-            cam_deltas = voxels.t_stops[:, 1:] - voxels.t_stops[:, :-1]
-            cam_deltas = np.concatenate([cam_deltas, max_dist], axis=-1)
-            deltas.append(cam_deltas)
-            leaves.append(voxels.leaves)
-            points.append(torch.from_numpy(cam_points))
+    def _compute_distance_weights(self) -> torch.Tensor:
+        positions = torch.from_numpy(self.voxels.leaf_centers())
+        squared_dist = positions.square().sum(-1)
+        squared_dist /= self.voxels.scale * self.voxels.scale * 3
+        return squared_dist
 
-        device = self.images.device
-        leaves = [torch.from_numpy(x).to(device) for x in leaves]
-        self.leaves = nn.ParameterList([nn.Parameter(x, requires_grad=False) for x in leaves])
-        deltas = [torch.from_numpy(d).to(device) for d in deltas]
-        self.deltas = nn.ParameterList([nn.Parameter(d, requires_grad=False) for d in deltas])
-        points = torch.cat(points)
-        points = points.unsqueeze(1)
-        images = self.images.unsqueeze(1)
-        targets = F.grid_sample(images, points, align_corners=False, padding_mode="zeros")
-        self.targets = nn.Parameter(targets, requires_grad=False)
-
-    def forward(self, camera: int) -> torch.Tensor:
-        left_trans = torch.ones((len(self.positions), 1), dtype=torch.float32, device=self.opacity.device)
-        leaves = self.leaves[camera]
-        deltas = self.deltas[camera]
-        opacity = self.opacity[leaves]
+    def forward(self, t_stops: torch.Tensor,
+                leaves: torch.Tensor) -> torch.Tensor:
+        num_rays, length = leaves.shape
+        max_dist = torch.full((num_rays, 1), 1e10, dtype=torch.float32,
+                              device=self.logits.device)
+        left_trans = torch.ones_like(max_dist)
+        opacity = torch.sigmoid(self.logits)
+        opacity = opacity[leaves]
+        deltas = t_stops[:, 1:] - t_stops[:, :-1]
+        deltas = torch.cat([deltas, max_dist], axis=-1)
         alpha = 1 - torch.exp(-(opacity * deltas))
         ones = torch.ones_like(alpha)
         trans = torch.minimum(ones, 1 - alpha + 1e-10)
-        _, trans = trans.split([1, leaves.shape[1] - 1], dim=-1)
+        _, trans = trans.split([1, length - 1], dim=-1)
         trans = torch.cat([left_trans, trans], -1)
         weights = alpha * torch.cumprod(trans, -1)
         output = weights.sum(-1)
         return output
 
-    def _loss(self, camera: int):
-        outputs = self.forward(camera)
-        loss = (self.targets[camera] - outputs).square().sum()
+    def _val_image(self, camera: CameraInfo) -> np.ndarray:
+        x_vals = np.linspace(-1, 1, self._resolution)
+        y_vals = np.linspace(-1, 1, self._resolution)
+        points = np.stack(np.meshgrid(x_vals, y_vals), -1).reshape(-1, 2)
+        starts, directions = camera.raycast(points)
+        t_stops, leaves = self.voxels.intersect(starts, directions,
+                                                self._path_length)
+        t_stops = torch.from_numpy(t_stops)
+        leaves = torch.from_numpy(leaves)
+        pixels = self.forward(t_stops, leaves)
+        pixels = pixels.detach().cpu().numpy()
+        pixels = pixels.reshape(self._resolution, self._resolution)
+        pixels = (pixels * 255).astype(np.uint8)
+        return pixels
+
+    def _loss(self, t_stops: torch.Tensor, leaves: torch.Tensor,
+              targets: torch.Tensor, debug: bool) -> torch.Tensor:
+        outputs = self.forward(t_stops, leaves)
+        render_energy = (targets - outputs).square().mean()
+        opacity = torch.sigmoid(self.logits)
+        blob_energy = (self._blob_prior * opacity).square().sum()
+        loss = render_energy + self._blob_prior_weight * blob_energy
+        if debug:
+            return namedtuple("Loss", ["render", "blob"])(
+                render_energy.item(),
+                blob_energy.item()
+            )
+
         return loss
 
+    @property
+    def opacity(self) -> np.ndarray:
+        return torch.sigmoid(self.logits).detach().cpu().numpy()
+
     def _log(self, iteration, loss):
-        opacity = self.opacity.clamp(0, 1).detach().cpu().numpy()
-        occupied = (opacity * 5).astype(np.int32)
-        centers = self.voxels.leaf_centers()
-        scales = self.voxels.leaf_scales()
-        print(iteration, loss, np.bincount(occupied, minlength=5).tolist())
-        self.log.append((
-            iteration,
-            opacity,
-            centers,
-            scales))
+        occupied = (self.opacity * 5).astype(np.int32)
+        print(iteration, loss,
+              np.bincount(occupied, minlength=5).tolist())
 
-    def fit(self, images: torch.Tensor, num_steps: int, num_finetune: int):
-        optim = torch.optim.Adam([self.opacity], 3e-5)
+    def fit(self, images: torch.Tensor, cameras: List[CameraInfo],
+            batch_size: int, num_epochs: int, learning_rate=1.0):
+        optim = torch.optim.Adam([self.logits], learning_rate)
 
-        # TODO implement minibatching with rays
-        # TODO speed up ray casting
-        # 1. create ray dataset
-        # 2. sample dataset
-        
-        def _closure():
-            optim.zero_grad()
-            loss = 0
-            for i in range(self.num_cameras):
-                loss += self._loss(i)
+        dataset = VoxelDataset(images, cameras, self.voxels,
+                               self._path_length, self._resolution)
+        data_loader = DataLoader(dataset, batch_size, True)
 
-            loss.backward()
-            return loss
+        device = self.logits.device
+        viz_camera = 0
+        for epoch in range(num_epochs):
+            print("Epoch", epoch)
+            for step, (t_stops, leaves, targets) in enumerate(data_loader):
+                t_stops = t_stops.to(device)
+                leaves = leaves.to(device)
+                targets = targets.to(device)
 
-        for i in range(num_steps):
-            optim.step(_closure)             
-            if i % 10 == 0:
-                self._log(i, self._loss(0).item())
+                optim.zero_grad()
+                loss = self._loss(t_stops, leaves, targets, False)
+                loss.backward()
+                optim.step()
 
-        print("Merging octree...")
-        opacity = self.opacity.detach().cpu().numpy()
-        for _ in range(4):
-            opacity = self.voxels.merge(opacity, 0.1)
+                if step % 5 == 0:
+                    with torch.no_grad():
+                        self._log(step, self._loss(t_stops, leaves, targets, True))
 
-        print("Splitting octree...")
-        for _ in range(4):
-            opacity = self.voxels.split(opacity, 0.1)
-
-        positions = self.voxels.leaf_centers()
-        positions = torch.from_numpy(positions).to(device=images.device)
-        opacity = torch.from_numpy(opacity).to(device=images.device)
-        self.opacity = nn.Parameter(opacity)
-        self.positions = nn.Parameter(positions, requires_grad=False)
-        self._update_rays()
-
-        print("Finetuning opacity...")
-        optim = torch.optim.Adam([self.opacity], 1e-3)
-        for i in range(num_steps, num_steps + num_finetune):
-            optim.step(_closure)
-            if i % 10 == 0:
-                self._log(i, self._loss(0).item())
-
-        self._log(num_steps + num_finetune, self._loss(0).item())
+                    with torch.no_grad():
+                        name = "e{:04}_b{:03}_c{:03}.png".format(epoch, step, viz_camera)
+                        path = os.path.join(self._image_dir, name)
+                        cv2.imwrite(path, self._val_image(cameras[viz_camera]))
+                        viz_camera = (viz_camera + 1) % len(cameras)
 
 
 def _convert_cameras(image_dir, split, scale=1):
@@ -242,12 +228,12 @@ def _extract_masks(image_dir, scale=1):
         cv2.imwrite(mask_path, mask)
 
 
-def _carve_and_calibrate(image_dir, initial_depth, max_voxels, num_steps, num_finetune, scale):
-    mask_dir = os.path.join(image_dir, "train", "masks")
-    device = "cuda"
+def _carve(params):
+    mask_dir = os.path.join(params["image_dir"], "train", "masks")
+    device = "cpu"
 
-    cameras = CameraInfo.from_json(os.path.join(image_dir, "train_cameras.json"))
-    cameras = cameras[:10]
+    cameras = CameraInfo.from_json(os.path.join(params["image_dir"], "train_cameras.json"))
+    cameras = cameras[:params["num_cameras"]]
     images = []
     for camera in cameras:
         image_path = os.path.join(mask_dir, camera.name + ".png")
@@ -256,86 +242,99 @@ def _carve_and_calibrate(image_dir, initial_depth, max_voxels, num_steps, num_fi
 
     images = np.stack(images).astype(np.float32)
 
-    occupancy = Occupancy(cameras, images, initial_depth, max_voxels, scale)
+    occupancy = VolumeCarver(params["depth"],
+                             params["scale"],
+                             params["path_length"],
+                             params["results_dir"],
+                             params["blob_prior_weight"],
+                             params["resolution"])
     occupancy.to(device)
 
-    occupancy.fit(images, num_steps, num_finetune)
-    entries = {}
-    entries["num_entries"] = len(occupancy.log)
-    entries["iterations"] = np.stack([entry[0] for entry in occupancy.log])
-    entries["intrinsics"] = occupancy.camera_transform.intrinsics
-    entries["rotation_quats"] = np.stack([entry[1] for entry in occupancy.log])
-    entries["translate_vecs"] = np.stack([entry[2] for entry in occupancy.log])
-    for i, _, _, opacity, centers, scales in occupancy.log:
-        entries["opacity{:04}".format(i)] = opacity
-        entries["centers{:04}".format(i)] = centers
-        entries["scales{:04}".format(i)] = scales
+    occupancy.fit(images, cameras, 50000, params["num_epochs"])
+    entries = occupancy.voxels.state_dict
+    entries["opacity"] = occupancy.opacity
+    entries["names"] = [camera.name for camera in cameras]
+    entries["intrinsics"] = np.stack([camera.intrinsics for camera in cameras])
+    entries["extrinsics"] = np.stack([camera.extrinsics for camera in cameras])
 
-    np.savez(os.path.join(image_dir, "carving.npz"), **entries)
-    occupancy.voxels.save(os.path.join(image_dir, "voxels.npz"))
-
-    cameras_path = os.path.join(image_dir, "cameras.json")
-    CameraInfo.to_json(cameras_path, occupancy.camera_transform.camera_info)
+    np.savez(os.path.join(params["results_dir"], "carving.npz"), **entries)
 
 
-def _create_carve_scenepic(image_dir):
-    mask_dir = os.path.join(image_dir, "masks")
+def _create_carve_scenepic(image_dir: str, results_dir: str):
+    print("Creating scenepic")
+    mask_dir = os.path.join(image_dir, "train", "masks")
+    data = np.load(os.path.join(results_dir, "carving.npz"))
+    print("Loading images...")
     images = []
-    for name in os.listdir(mask_dir):
-        if not name.endswith(".png"):
-            continue
-
-        image = cv2.imread(os.path.join(mask_dir, name))
+    for name in data["names"]:
+        image_path = os.path.join(mask_dir, name + ".png")
+        image = cv2.imread(image_path)
         images.append(image[:, :, 0] != 0)
 
     height, width = images[0].shape[:2]
-    data = np.load(os.path.join(image_dir, "carving.npz"))
 
     intrinsics = data["intrinsics"]
-    rotations = [Rotation.from_quat(rquat).as_matrix() for rquat in data["rotation_quats"][-1]]
-    translations = [sp.Transforms.translate(tvec) for tvec in data["translate_vecs"][-1]]
+    extrinsics = data["extrinsics"]
     num_cameras = len(intrinsics)
+    voxels = OcTree.load(data)
 
     scene = sp.Scene()
     frustums = scene.create_mesh("frustums", layer_id="frustums")
-    canvas = scene.create_canvas_3d(width=width, height=height)
+    canvas = scene.create_canvas_3d(width=width * 2, height=height * 2)
     cmap = get_cmap("jet")
     colors = cmap(np.linspace(0, 1, num_cameras))[:, :3]
     image_meshes = []
     cameras = []
+    sys.stdout.write("Adding cameras")
     for i in range(num_cameras):
-        world_to_camera = translations[i].copy()
-        world_to_camera[:3, :3] = rotations[i]
-        camera_to_world = np.linalg.inv(world_to_camera)
-
-        gl_world_to_camera = sp.Transforms.gl_world_to_camera(camera_to_world)
+        sys.stdout.write(".")
+        sys.stdout.flush()
+        gl_world_to_camera = sp.Transforms.gl_world_to_camera(extrinsics[i])
         gl_projection = sp.Transforms.gl_projection(intrinsics[i], width, height, 0.1, 100)
         camera = sp.Camera(world_to_camera=gl_world_to_camera, projection=gl_projection)
         cameras.append(camera)
 
         image = scene.create_image("cam_image{}".format(i))
         image.from_numpy(images[i])
-        mesh = scene.create_mesh("cam_image{}".format(i), layer_id="images", texture_id=image.image_id, double_sided=True)
-        mesh.add_camera_image(camera, depth=0.2)
+        mesh = scene.create_mesh("cam_image{}".format(i), layer_id="images",
+                                 texture_id=image.image_id, double_sided=True)
+        mesh.add_camera_image(camera, depth=0.5)
         image_meshes.append(mesh)
 
-        frustums.add_camera_frustum(camera, colors[i], depth=0.2, thickness=0.004)
+        frustums.add_camera_frustum(camera, colors[i], depth=0.5, thickness=0.01)
 
-    final = data["iterations"][-1]
-    centers = data["centers{:04}".format(final)]
-    scales = data["scales{:04}".format(final)]
-    opacity = data["opacity{:04}".format(final)]
-    colors = cmap(np.linspace(0, 1, 5))[:, :3]
+    print("done.")
+
+    sys.stdout.write("Adding voxels")
+    centers = voxels.leaf_centers()
+    scales = voxels.leaf_scales()
+    opacity = data["opacity"]
+    num_bands = 8
+    colors = cmap(np.linspace(0, 1, num_bands))[:, :3]
     # we want five meshes to represent the different levels
     voxel_meshes = [scene.create_mesh("voxels{}".format(i),
-                                      layer_id="{:.2f}->{:.2f}".format(i*0.2, (i+1)*0.2),
+                                      layer_id="{:.2f}->{:.2f}".format(i*1.0/num_bands, (i+1)*1.0/num_bands),
                                       shared_color=colors[i])
-                    for i in range(5)]
-    for center, scale, opacity in zip(centers, scales, opacity):
-        size = pow(2.0, 1-scale)
-        index = int(min(opacity, 0.99) * 5)
-        voxel_meshes[index].add_cube(transform=sp.Transforms.translate(center) @ sp.Transforms.scale(size))
+                    for i in range(num_bands)]
 
+    positions = [[] for _ in range(num_bands)]
+    opacity = np.minimum(opacity, 0.99) * num_bands
+    opacity = opacity.astype(np.int32)
+    for i, (center, index) in enumerate(zip(centers, opacity)):
+        if i % 10000 == 0:
+            sys.stdout.write(".")
+            sys.stdout.flush()
+
+        positions[index].append(center)
+
+    for mesh, band_positions in zip(voxel_meshes, positions):
+        positions = np.stack(band_positions)
+        mesh.add_cube(transform=sp.Transforms.scale(scales[0] * 2))
+        mesh.enable_instancing(positions)
+
+    print("done.")
+
+    print("Creating frames")
     for i in range(num_cameras):
         frame = canvas.create_frame(camera=cameras[i])
         frame.add_mesh(frustums)
@@ -345,18 +344,21 @@ def _create_carve_scenepic(image_dir):
         for mesh in image_meshes:
             frame.add_mesh(mesh)
 
-    frame.add_mesh(frustums)
-    scene.save_as_html(os.path.join(image_dir, "carve.html"))
+    scene.framerate = 10
+    scene.save_as_html(os.path.join(results_dir, "carve.html"))
 
 
 def _parse_args():
     parser = argparse.ArgumentParser("Volume Dataset Preparation")
     parser.add_argument("image_dir", help="Image containing the training images")
-    parser.add_argument("--initial-depth", type=int, default=6, help="Initial depth of the voxel octree")
-    parser.add_argument("--max-voxels", type=int, default=52000, help="Maximum number of voxels")
-    parser.add_argument("--num-steps", type=int, default=1500, help="Number of carving steps")
-    parser.add_argument("--num-finetune", type=int, default=500, help="Number of fine-tuning steps")
+    parser.add_argument("--num-cameras", type=int, default=10, help="Number of cameras to use")
+    parser.add_argument("--depth", type=int, default=5, help="Depth of the voxel octree")
+    parser.add_argument("--num-epochs", type=int, default=100, help="Number of carving epochs")
     parser.add_argument("--scale", type=float, default=2, help="Scale of voxel space")
+    parser.add_argument("--path-length", type=int, default=50, help="Number of voxels to intersect")
+    parser.add_argument("--results-dir", default="voxels", help="Output directory for results")
+    parser.add_argument("--blob-prior-weight", type=float, default=1e-3, help="Weight for the blob prior")
+    parser.add_argument("--resolution", type=int, default=200, help="Image size to use during training")
     return parser.parse_args()
 
 
@@ -366,8 +368,8 @@ def _main():
     #    _convert_cameras(args.image_dir, split, 0.5)
 
     #_extract_masks(os.path.join(args.image_dir, "train"), 0.5)
-    _carve_and_calibrate(args.image_dir, args.initial_depth, args.max_voxels, args.num_steps, args.num_finetune, args.scale)
-    #_create_carve_scenepic(args.image_dir)
+    _carve(vars(args))
+    _create_carve_scenepic(args.image_dir, args.results_dir)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,10 @@
 """Integration test for the Raycaster (produces a cool scenepic)."""
+import argparse
 import timeit
 from typing import List
 
 from matplotlib.pyplot import get_cmap
-from nerf import CameraInfo, OcTree
+from nerf import CameraInfo, OcTree, FastOcTree
 import numpy as np
 import scenepic as sp
 
@@ -33,21 +34,31 @@ def _test_cameras() -> List[CameraInfo]:
     return cameras
 
 
+def _parse_args():
+    parser = argparse.ArgumentParser("RayCaster Test")
+    parser.add_argument("--fast", action="store_true", help="Use FastOctree")
+    return parser.parse_args()
+
+
 def _main():
+    args = _parse_args()
     cameras = _test_cameras()
 
     np.random.seed(20080524)
 
-    voxels = OcTree(4)
+    if args.fast:
+        voxels = FastOcTree(4)
+    else:
+        voxels = OcTree(4)
+
     opacity = np.random.uniform(0, 1, voxels.num_leaves)
-    voxels.split(opacity, 0.1, 4096)
+    voxels.split(opacity, 4096)
     opacity = np.random.uniform(0, 1, voxels.num_leaves)
     voxels.merge(opacity, 0.1)
     opacity = np.random.uniform(0, 1, voxels.num_leaves)
-    voxels.split(opacity, 0.1, 4096)
+    voxels.split(opacity, 4096)
     positions = voxels.leaf_centers()
     scales = voxels.leaf_scales()
-    leaf_ids = list(sorted(voxels._leaf_ids))
 
     pos_per_camera = 100
     num_steps = 30
@@ -59,7 +70,7 @@ def _main():
     canvas = scene.create_canvas_3d(width=600, height=600)
 
     voxel_mesh = scene.create_mesh(layer_id="voxels")
-    for pos, scale, leaf_id in zip(positions, scales, leaf_ids):
+    for pos, scale in zip(positions, scales):
         transform = sp.Transforms.translate(pos) @ sp.Transforms.scale(scale * 2)
         voxel_mesh.add_cube(sp.Colors.White, transform=transform,
                             fill_triangles=False, add_wireframe=True)
@@ -81,7 +92,6 @@ def _main():
 
     time_taken = timeit.timeit(lambda: voxels.intersect(starts, directions, num_steps), number=3)
     print("Best of 3:", time_taken, "s")
-
 
     cmap = get_cmap("jet")
     colors = cmap(np.linspace(0, 1, len(pos_index)))[:, :3]
