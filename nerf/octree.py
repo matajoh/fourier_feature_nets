@@ -218,7 +218,7 @@ def _trace_ray_path(scale: float, leaf_index: np.ndarray,
 
             stack.pop()
             stop += 1
-            if t >= tr.t_max or stop == max_length:
+            if t >= tr.t_max or stop == max_length - 1:
                 break
 
             t = tc.t_max + 1e-5
@@ -399,5 +399,5 @@ class OcTree:
         return result
 
     def load_state(self, state_dict: Dict[str, np.ndarray]):
-        self._leaf_ids = set(state_dict["leaf_index"].tolist())
-        self._scale = state_dict["scale"]
+        self._leaf_ids = set([int(index) for index in state_dict["leaf_index"]])
+        self._scale = float(state_dict["scale"])

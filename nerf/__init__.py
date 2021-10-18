@@ -1,7 +1,7 @@
 """Module created for [my NeRF lecture]."""
 
 from .camera_info import CameraInfo
-from .dataset import PixelDataset, VoxelDataset
+from .datasets import PixelDataset, VoxelDataset, RaySamplingDataset
 from .fast_octree import FastOcTree
 from .models import (
     BasicFourierMLP,
@@ -11,6 +11,7 @@ from .models import (
 )
 from .octree import OcTree
 from .triangulation import Triangulation
+from .volume_carving import VolumeCarver
 
 __all__ = ["CameraInfo",
            "CameraTransform",
@@ -22,4 +23,6 @@ __all__ = ["CameraInfo",
            "OcTree",
            "PixelDataset",
            "VoxelDataset",
-           "Triangulation"]
+           "RaySampingDataset",
+           "Triangulation",
+           "VolumeCarver"]
