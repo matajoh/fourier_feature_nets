@@ -23,6 +23,6 @@ __all__ = ["CameraInfo",
            "OcTree",
            "PixelDataset",
            "VoxelDataset",
-           "RaySampingDataset",
+           "RaySamplingDataset",
            "Triangulation",
            "VolumeCarver"]

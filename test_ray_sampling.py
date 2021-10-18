@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 
@@ -8,33 +9,43 @@ import numpy as np
 import scenepic as sp
 
 
+def _parse_args():
+    parser = argparse.ArgumentParser("Ray Sampling Tester")
+    parser.add_argument("data_dir", help="Path to the data directory")
+    parser.add_argument("voxels_dir", help="Path to the voxels directory")
+    parser.add_argument("--path-length", type=int, default=128,
+                        help="Number of voxels to intersect")
+    parser.add_argument("--num-samples", type=int, default=128,
+                        help="Number of samples to take")
+    parser.add_argument("--resolution", type=int, default=64,
+                        help="Ray sampling resolution")
+    parser.add_argument("--num-cameras", type=int, default=10,
+                        help="Number of cameras")
+    return parser.parse_args()
+
+
 def _main():
-    data_dir = "D:\\Data\\lego"
-    voxels_dir = "voxels"
-    path_length = 128
-    num_samples = 128
-    resolution = 64
-    num_cameras = 10
-    image_dir = os.path.join(data_dir, "train")
+    args = _parse_args()
+    image_dir = os.path.join(args.data_dir, "train")
     images = []
-    cameras = CameraInfo.from_json(os.path.join(data_dir, "train_cameras.json"))
-    cameras = cameras[:num_cameras]
+    cameras = CameraInfo.from_json(os.path.join(args.data_dir, "train_cameras.json"))
+    cameras = cameras[:args.num_cameras]
     for camera in cameras:
         image = cv2.imread(os.path.join(image_dir, camera.name + ".png"))
         images.append(image[:, :, ::-1])
 
     images = np.stack(images)
     _, width, height, _ = images.shape
-    data = np.load(os.path.join(voxels_dir, "carving.npz"))
+    data = np.load(os.path.join(args.voxels_dir, "carving.npz"))
     voxels = OcTree.load(data)
-    dataset = RaySamplingDataset(images, cameras, voxels, path_length,
-                                 num_samples, resolution, data["opacity"])
+    dataset = RaySamplingDataset(images, cameras, voxels, args.path_length,
+                                 args.num_samples, args.resolution, data["opacity"])
 
     scene = sp.Scene()
     frustums = scene.create_mesh("frustums", layer_id="frustums")
     canvas = scene.create_canvas_3d(width=width, height=height)
     cmap = get_cmap("jet")
-    camera_colors = cmap(np.linspace(0, 1, num_cameras))[:, :3]
+    camera_colors = cmap(np.linspace(0, 1, args.num_cameras))[:, :3]
     image_meshes = []
     sys.stdout.write("Adding cameras")
     for pixels, camera, color in zip(images, cameras, camera_colors):
@@ -55,7 +66,7 @@ def _main():
     print("done.")
 
     sys.stdout.write("Sampling rays...")
-    num_rays = resolution * resolution
+    num_rays = args.resolution * args.resolution
     for i, camera in enumerate(cameras):
         sys.stdout.write(".")
         sys.stdout.flush()
@@ -64,7 +75,7 @@ def _main():
         index = [i for i in range(start, end)]
         positions, _, colors = dataset[index]
 
-        colors = colors.unsqueeze(1).expand(-1, num_samples, -1)
+        colors = colors.unsqueeze(1).expand(-1, args.num_samples, -1)
         positions = positions.numpy().reshape(-1, 3)
         colors = colors.numpy().copy().reshape(-1, 3)
 

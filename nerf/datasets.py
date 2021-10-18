@@ -6,6 +6,7 @@ import time
 from typing import List
 
 import cv2
+from numba import njit
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -225,6 +226,7 @@ class VoxelDataset(TensorDataset):
         TensorDataset.__init__(self, t_stops, leaves, occupancy)
 
 
+@njit
 def _determine_weights(leaves: np.ndarray,
                        voxel_weights: np.ndarray) -> np.ndarray:
     num_rays, path_length = leaves.shape
@@ -237,26 +239,30 @@ def _determine_weights(leaves: np.ndarray,
         for j, leaf_index in enumerate(leaves[i]):
             if leaf_index == -1:
                 break
-           
+
             sampling_weights[i, j] = voxel_weights[leaf_index]
 
     return sampling_weights
 
 
+@njit
 def _sample_t_values(t_starts: np.ndarray, t_ends: np.ndarray,
                      weights: np.ndarray, num_samples: int) -> np.ndarray:
     num_rays = len(t_starts)
     t_values = np.zeros((num_rays, num_samples), np.float32)
-    weights = np.cumsum(weights, -1)
-    weights = weights / weights[:, -1:]
 
     samples = np.random.random(size=(num_rays, num_samples)).astype(np.float32)
     for i in range(num_rays):
-        indices = np.searchsorted(weights[i], samples[i])
-        t_values[i] = np.random.uniform(t_starts[i, indices],
-                                        t_ends[i, indices])
+        ray_dist = np.cumsum(weights[i])
+        ray_dist = ray_dist / ray_dist[-1]
+        indices = np.searchsorted(ray_dist, samples[i])
+        indices = np.sort(indices)
+        ray_samples = np.random.random(size=len(indices))
+        for j, sample in zip(indices, ray_samples):
+            start = t_starts[i, j]
+            end = t_ends[i, j]
+            t_values[i, j] = start + sample * (end - start)
 
-    t_values = np.sort(t_values, -1)
     return t_values
 
 
