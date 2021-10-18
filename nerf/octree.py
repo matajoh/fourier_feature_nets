@@ -370,6 +370,8 @@ class OcTree:
             starts = starts.reshape(1, 3)
             directions = directions.reshape(1, 3)
 
+        directions = np.where(directions == 0, 1e-8, directions)
+
         leaf_index = list(sorted(self._leaf_ids))
         leaf_index = np.array(leaf_index)
         return _batch_intersect(self._scale, leaf_index, starts, directions, max_length)

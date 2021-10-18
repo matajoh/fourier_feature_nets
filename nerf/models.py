@@ -135,7 +135,7 @@ class GaussianFourierMLP(nn.Module):
         frequencies = torch.normal(0, sigma, size=(num_inputs, num_frequencies))
         frequencies *= 2 * math.pi
         self.frequencies = nn.Parameter(frequencies, requires_grad=False)
-        self.input = nn.Linear(num_frequencies * num_inputs, num_channels)
+        self.input = nn.Linear(num_frequencies * 2, num_channels)
         self.hidden0 = nn.Linear(num_channels, num_channels)
         self.hidden1 = nn.Linear(num_channels, num_channels)
         self.output = nn.Linear(num_channels, num_outputs)

@@ -255,13 +255,14 @@ def _sample_t_values(t_starts: np.ndarray, t_ends: np.ndarray,
     for i in range(num_rays):
         ray_dist = np.cumsum(weights[i])
         ray_dist = ray_dist / ray_dist[-1]
-        indices = np.searchsorted(ray_dist, samples[i])
-        indices = np.sort(indices)
-        ray_samples = np.random.random(size=len(indices))
-        for j, sample in zip(indices, ray_samples):
-            start = t_starts[i, j]
-            end = t_ends[i, j]
+        ray_indices = np.searchsorted(ray_dist, samples[i])
+        ray_samples = np.random.random(size=len(ray_indices))
+        for j, (index, sample) in enumerate(zip(ray_indices, ray_samples)):
+            start = t_starts[i, index]
+            end = t_ends[i, index]
             t_values[i, j] = start + sample * (end - start)
+
+        t_values[i] = np.sort(t_values[i])
 
     return t_values
 
@@ -333,6 +334,7 @@ class RaySamplingDataset(Dataset):
         self.weights = weights[:, :-1]
 
         passed = time.time() - start
+        self.resolution = resolution
         self.num_rays = len(t_stops)
         self.num_samples = num_samples
         print(passed, "elapsed,", self.num_rays, "rays at",
@@ -345,7 +347,12 @@ class RaySamplingDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        num_rays = len(idx)
+        if isinstance(idx, list):
+            num_rays = len(idx)
+        else:
+            num_rays = 1
+            idx = [idx]
+
         starts = self.starts[idx]
         directions = self.directions[idx]
 
@@ -362,6 +369,7 @@ class RaySamplingDataset(Dataset):
         max_dist = torch.full((num_rays, 1), 1e10, dtype=torch.float32)
         deltas = t_values[:, 1:] - t_values[:, :-1]
         deltas = torch.cat([deltas, max_dist], axis=-1)
+        deltas = deltas.unsqueeze(-1)
 
         colors = self.colors[idx]
 

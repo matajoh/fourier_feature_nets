@@ -131,4 +131,4 @@ dmypy.json
 # misc
 .vscode
 *.html
-voxels
+results
