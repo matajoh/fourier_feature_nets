@@ -17,7 +17,7 @@ def _train(dataset: RaySamplingDataset, model: GaussianFourierMLP,
     for i in range(num_epochs):
         print("Epoch", i)
 
-        for positions, deltas, targets in data_loader:
+        for positions, _, deltas, targets in data_loader:
             positions = positions.to(device)
             deltas = deltas.to(device)
             targets = targets.to(device)

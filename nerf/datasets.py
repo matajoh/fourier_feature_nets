@@ -365,4 +365,4 @@ class RaySamplingDataset(Dataset):
 
         colors = self.colors[idx]
 
-        return positions, deltas, colors
+        return positions, -directions, deltas, colors

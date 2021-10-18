@@ -73,7 +73,7 @@ def _main():
         start = i * num_rays
         end = start + num_rays
         index = [i for i in range(start, end)]
-        positions, _, colors = dataset[index]
+        positions, _, _, colors = dataset[index]
 
         colors = colors.unsqueeze(1).expand(-1, args.num_samples, -1)
         positions = positions.numpy().reshape(-1, 3)
