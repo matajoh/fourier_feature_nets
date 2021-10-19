@@ -185,9 +185,7 @@ class VoxelDataset(TensorDataset):
         assert len(masks.shape) == 3
         assert len(masks) == len(cameras)
         masks = np.where(masks > 0, 1, 0)
-        if masks.dtype == np.uint8:
-            masks = masks.astype(np.float32)
-
+        masks = masks.astype(np.float32)
         masks = torch.from_numpy(masks)
         masks = masks.unsqueeze(1)
 

@@ -124,7 +124,7 @@ class VolumeCarver(nn.Module):
                         self._log(step, self._loss(t_stops, leaves, targets, True))
 
                     with torch.no_grad():
-                        name = "e{:04}_b{:03}_c{:03}.png".format(epoch, step, viz_camera)
+                        name = "e{:04}_s{:03}_c{:03}.png".format(epoch, step, viz_camera)
                         path = os.path.join(self._image_dir, name)
                         cv2.imwrite(path, self._val_image(cameras[viz_camera]))
                         viz_camera = (viz_camera + 1) % len(cameras)

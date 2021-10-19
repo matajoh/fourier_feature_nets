@@ -97,7 +97,7 @@ def _main():
     print("done.")
 
     scene.framerate = 10
-    scene.save_as_html("ray_sampling.html")
+    scene.save_as_html("ray_sampling.html", "Ray Sampling")
 
 
 if __name__ == "__main__":

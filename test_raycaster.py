@@ -47,16 +47,10 @@ def _main():
     np.random.seed(20080524)
 
     if args.fast:
-        voxels = FastOcTree(4)
+        voxels = FastOcTree(5)
     else:
-        voxels = OcTree(4)
+        voxels = OcTree(5)
 
-    opacity = np.random.uniform(0, 1, voxels.num_leaves)
-    voxels.split(opacity, 4096)
-    opacity = np.random.uniform(0, 1, voxels.num_leaves)
-    voxels.merge(opacity, 0.1)
-    opacity = np.random.uniform(0, 1, voxels.num_leaves)
-    voxels.split(opacity, 4096)
     positions = voxels.leaf_centers()
     scales = voxels.leaf_scales()
 
@@ -70,10 +64,9 @@ def _main():
     canvas = scene.create_canvas_3d(width=600, height=600)
 
     voxel_mesh = scene.create_mesh(layer_id="voxels")
-    for pos, scale in zip(positions, scales):
-        transform = sp.Transforms.translate(pos) @ sp.Transforms.scale(scale * 2)
-        voxel_mesh.add_cube(sp.Colors.White, transform=transform,
-                            fill_triangles=False, add_wireframe=True)
+    voxel_mesh.add_cube(sp.Colors.White, transform=sp.Transforms.scale(scales[0] * 2),
+                        fill_triangles=False, add_wireframe=True)
+    voxel_mesh.enable_instancing(positions)
 
     starts = []
     directions = []

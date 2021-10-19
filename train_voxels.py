@@ -76,7 +76,7 @@ def _convert_cameras(image_dir, split):
     CameraInfo.to_json(os.path.join(image_dir, "{}_cameras.json".format(split)), cameras)
 
 
-def _extract_masks(image_dir, scale=1):
+def _extract_masks(image_dir):
     masks_dir = os.path.join(image_dir, "masks")
     if not os.path.exists(masks_dir):
         os.makedirs(masks_dir)
@@ -87,13 +87,6 @@ def _extract_masks(image_dir, scale=1):
 
         mask_path = os.path.join(masks_dir, name)
         image = cv2.imread(os.path.join(image_dir, name))
-
-        height, width, _ = image.shape
-
-        if scale != 1:
-            height = int(scale * height)
-            width = int(scale * width)
-            image = cv2.resize(image, (width, height), cv2.INTER_AREA)
 
         chroma = [0, 0, 0]
         test = (image == chroma).sum(-1)
@@ -147,35 +140,33 @@ def _create_carve_scenepic(image_dir: str, results_dir: str):
 
     height, width = images[0].shape[:2]
 
-    intrinsics = data["intrinsics"]
-    extrinsics = data["extrinsics"]
-    num_cameras = len(intrinsics)
     voxels = OcTree.load(data)
 
     scene = sp.Scene()
     frustums = scene.create_mesh("frustums", layer_id="frustums")
-    canvas = scene.create_canvas_3d(width=width * 2, height=height * 2)
+    canvas = scene.create_canvas_3d(width=width, height=height)
     cmap = get_cmap("jet")
-    colors = cmap(np.linspace(0, 1, num_cameras))[:, :3]
     image_meshes = []
-    cameras = []
+    cameras = [CameraInfo.create(name, (width, height), intrinsics, extrinsics)
+               for name, intrinsics, extrinsics in zip(data["names"],
+                                                       data["intrinsics"],
+                                                       data["extrinsics"])]
+    num_cameras = len(cameras)
+    colors = cmap(np.linspace(0, 1, num_cameras))[:, :3]
     sys.stdout.write("Adding cameras")
-    for i in range(num_cameras):
+    for camera, pixels, color in zip(cameras, images, colors):
         sys.stdout.write(".")
         sys.stdout.flush()
-        gl_world_to_camera = sp.Transforms.gl_world_to_camera(extrinsics[i])
-        gl_projection = sp.Transforms.gl_projection(intrinsics[i], width, height, 0.1, 100)
-        camera = sp.Camera(world_to_camera=gl_world_to_camera, projection=gl_projection)
-        cameras.append(camera)
+        sp_camera = camera.to_scenepic()
 
-        image = scene.create_image("cam_image{}".format(i))
-        image.from_numpy(images[i])
-        mesh = scene.create_mesh("cam_image{}".format(i), layer_id="images",
+        image = scene.create_image(camera.name)
+        image.from_numpy(pixels)
+        mesh = scene.create_mesh(camera.name, layer_id="images",
                                  texture_id=image.image_id, double_sided=True)
-        mesh.add_camera_image(camera, depth=0.5)
+        mesh.add_camera_image(sp_camera, depth=0.5)
         image_meshes.append(mesh)
 
-        frustums.add_camera_frustum(camera, colors[i], depth=0.5, thickness=0.01)
+        frustums.add_camera_frustum(sp_camera, color, depth=0.5, thickness=0.01)
 
     print("done.")
 
@@ -210,7 +201,7 @@ def _create_carve_scenepic(image_dir: str, results_dir: str):
 
     print("Creating frames")
     for i in range(num_cameras):
-        frame = canvas.create_frame(camera=cameras[i])
+        frame = canvas.create_frame(camera=cameras[i].to_scenepic())
         frame.add_mesh(frustums)
         for mesh in voxel_meshes:
             frame.add_mesh(mesh)
@@ -219,12 +210,13 @@ def _create_carve_scenepic(image_dir: str, results_dir: str):
             frame.add_mesh(mesh)
 
     scene.framerate = 10
-    scene.save_as_html(os.path.join(results_dir, "carve.html"))
+    scene.save_as_html(os.path.join(results_dir, "carve.html"), "Voxel Carving")
 
 
 def _parse_args():
     parser = argparse.ArgumentParser("Volume Dataset Preparation")
     parser.add_argument("image_dir", help="Image containing the training images")
+    parser.add_argument("results_dir", help="Output directory for results")
     parser.add_argument("--num-cameras", type=int, default=10, help="Number of cameras to use")
     parser.add_argument("--depth", type=int, default=5, help="Depth of the voxel octree")
     parser.add_argument("--num-epochs", type=int, default=100, help="Number of carving epochs")
@@ -241,7 +233,10 @@ def _main():
     for split in ["train", "val", "test"]:
         _convert_cameras(args.image_dir, split)
 
-    _extract_masks(os.path.join(args.image_dir, "train"), 0.5)
+    if not os.path.exists(args.results_dir):
+        os.makedirs(args.results_dir)
+
+    _extract_masks(os.path.join(args.image_dir, "train"))
     _carve(vars(args))
     _create_carve_scenepic(args.image_dir, args.results_dir)
 
