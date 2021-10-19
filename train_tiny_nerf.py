@@ -167,7 +167,9 @@ def _main():
     trainer.to("cuda")
 
     trainer.fit(args.batch_size, args.learning_rate,
-                args.num_epochs, args.reporting_interval)
+                args.num_epochs, args.report_interval)
+
+    model.save(os.path.join(args.results_dir, "tiny_nerf.model"))
 
 
 if __name__ == "__main__":
