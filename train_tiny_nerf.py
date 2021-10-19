@@ -2,10 +2,11 @@ import argparse
 import os
 
 import cv2
-from nerf import CameraInfo, GaussianFourierMLP, OcTree, RaySamplingDataset
+from nerf import CameraInfo, MLP, OcTree, RaySamplingDataset
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim
 
 
@@ -30,6 +31,8 @@ class TinyNeRF(nn.Module):
         rgb_o = self.model(positions)
         rgb_o = rgb_o.reshape(num_rays, num_samples, 4)
         rgb, opacity = torch.split(rgb_o, [3, 1], -1)
+        rgb = torch.sigmoid(rgb)
+        opacity = F.softplus(opacity)
 
         left_trans = torch.ones((num_rays, 1, 1), dtype=torch.float32)
         left_trans = left_trans.to(positions.device)
@@ -41,6 +44,7 @@ class TinyNeRF(nn.Module):
         weights = alpha * torch.cumprod(trans, -2)
         outputs = weights * rgb
         outputs = outputs.sum(-2)
+        outputs = torch.clamp(outputs, 0, 1)
         return outputs
 
     def _loss(self, positions: torch.Tensor,
@@ -71,7 +75,6 @@ class TinyNeRF(nn.Module):
             pixels = np.concatenate(pixels)
             pixels = pixels.reshape(resolution, resolution, 3)
             pixels = (pixels * 255).astype(np.uint8)
-            pixels = cv2.cvtColor(pixels, cv2.COLOR_YCrCb2BGR)
             name = "val_e{:04}_s{:03}_c{:03}.png".format(epoch, step,
                                                          self._val_index)
             image_path = os.path.join(self._results_dir, name)
@@ -110,7 +113,6 @@ def _load_images(data_dir: str, split: str, num_cameras: int):
     cameras = cameras[:num_cameras]
     for camera in cameras:
         image = cv2.imread(os.path.join(image_dir, camera.name + ".png"))
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb)
         images.append(image)
 
     images = np.stack(images)
@@ -120,8 +122,9 @@ def _load_images(data_dir: str, split: str, num_cameras: int):
 def _parse_args():
     parser = argparse.ArgumentParser("Tiny NeRF")
     parser.add_argument("data_dir", help="Path to the data directory")
-    parser.add_argument("voxels_dir", help="Path to the voxels directory")
     parser.add_argument("results_dir", help="Path to output results")
+    parser.add_argument("--voxels-dir",
+                        help="Path to the voxels directory")
     parser.add_argument("--path-length", type=int, default=128,
                         help="Number of voxels to intersect")
     parser.add_argument("--num-samples", type=int, default=128,
@@ -136,32 +139,40 @@ def _parse_args():
                         help="Value of sigma for the gaussian model")
     parser.add_argument("--num-epochs", type=int, default=100,
                         help="Number of epochs to use for training.")
-    parser.add_argument("--report-interval", type=int, default=100,
+    parser.add_argument("--report-interval", type=int, default=1000,
                         help="Reporting interval for validation/logging")
     return parser.parse_args()
 
 
 def _main():
     args = _parse_args()
-    data = np.load(os.path.join(args.voxels_dir, "carving.npz"))
-    voxels = OcTree.load(data)
-    opacity = data["opacity"]
 
-    model = GaussianFourierMLP(3, 4, args.gauss_sigma)
-    initial_output = torch.FloatTensor([1e-5, 0.5, 0.5, 1e-5])
-    model.output.bias.data = torch.logit(initial_output)
+    if args.voxels_dir:
+        data = np.load(os.path.join(args.voxels_dir, "carving.npz"))
+        voxels = OcTree.load(data)
+        opacity = data["opacity"]
+    else:
+        voxels = None
+        opacity = None
+
+    model = MLP(3, 4)
+    initial_rgb = torch.FloatTensor([1e-5, 1e-5, 1e-5])
+    model.output.bias.data[:3] = torch.logit(initial_rgb)
+    model.output.bias.data[3:] = -2
 
     train_cameras, train_images = _load_images(args.data_dir, "train",
                                                args.num_cameras)
-    train_dataset = RaySamplingDataset(train_images, train_cameras, voxels,
-                                       args.path_length, args.num_samples,
-                                       args.resolution, opacity)
+    train_dataset = RaySamplingDataset(train_images, train_cameras,
+                                       args.num_samples, args.resolution,
+                                       args.path_length, voxels, opacity,
+                                       stratified=True)
 
     val_cameras, val_images = _load_images(args.data_dir, "val",
                                            args.num_cameras)
-    val_dataset = RaySamplingDataset(val_images, val_cameras, voxels,
-                                     args.path_length, args.num_samples,
-                                     args.resolution, opacity)
+    val_dataset = RaySamplingDataset(val_images, val_cameras,
+                                     args.num_samples, args.resolution,
+                                     args.path_length, voxels, opacity,
+                                     stratified=False)
 
     trainer = TinyNeRF(train_dataset, val_dataset, model, args.results_dir)
     trainer.to("cuda")

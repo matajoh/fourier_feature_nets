@@ -43,17 +43,21 @@ def _main():
     dataset = dataset.to("cuda")
 
     if args.nerf_model == "mlp":
-        model = nerf.MLP(2, 3, args.num_channels)
+        model = nerf.MLP(2, 3, args.num_channels,
+                         output_act=torch.sigmoid)
     elif args.nerf_model == "basic":
-        model = nerf.BasicFourierMLP(2, 3, args.num_channels)
+        model = nerf.BasicFourierMLP(2, 3, args.num_channels,
+                                     output_act=torch.sigmoid)
     elif args.nerf_model == "positional":
         model = nerf.PositionalFourierMLP(2, 3, args.pos_sigma,
                                           args.num_channels,
-                                          args.num_frequencies)
+                                          args.num_frequencies,
+                                          output_act=torch.sigmoid)
     elif args.nerf_model == "gaussian":
         model = nerf.GaussianFourierMLP(2, 3, args.gauss_sigma,
                                         args.num_channels,
-                                        args.num_frequencies)
+                                        args.num_frequencies,
+                                        output_act=torch.sigmoid)
     else:
         raise NotImplementedError("Unsupported model: {}".format(args.nerf_model))
 

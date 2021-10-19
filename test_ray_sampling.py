@@ -12,7 +12,7 @@ import scenepic as sp
 def _parse_args():
     parser = argparse.ArgumentParser("Ray Sampling Tester")
     parser.add_argument("data_dir", help="Path to the data directory")
-    parser.add_argument("voxels_dir", help="Path to the voxels directory")
+    parser.add_argument("--voxels-dir", help="Path to the voxels directory")
     parser.add_argument("--path-length", type=int, default=128,
                         help="Number of voxels to intersect")
     parser.add_argument("--num-samples", type=int, default=128,
@@ -36,10 +36,18 @@ def _main():
 
     images = np.stack(images)
     _, width, height, _ = images.shape
-    data = np.load(os.path.join(args.voxels_dir, "carving.npz"))
-    voxels = OcTree.load(data)
-    dataset = RaySamplingDataset(images, cameras, voxels, args.path_length,
-                                 args.num_samples, args.resolution, data["opacity"])
+    path_length = args.path_length
+    if args.voxels_dir:
+        data = np.load(os.path.join(args.voxels_dir, "carving.npz"))
+        voxels = OcTree.load(data)
+        opacity = data["opacity"]
+    else:
+        voxels = None
+        opacity = None
+
+    dataset = RaySamplingDataset(images, cameras, args.num_samples, 
+                                 args.resolution, path_length, voxels, opacity,
+                                 stratified=True)
 
     scene = sp.Scene()
     frustums = scene.create_mesh("frustums", layer_id="frustums")
@@ -79,17 +87,23 @@ def _main():
         positions = positions.numpy().reshape(-1, 3)
         colors = colors.numpy().copy().reshape(-1, 3)
 
-        not_empty = (colors == 0).sum(-1) < 3
-        positions = positions[not_empty]
-        colors = colors[not_empty]
+        empty = (colors == 0).sum(-1) == 3
+        not_empty = np.logical_not(empty)
 
         samples = scene.create_mesh()
         samples.add_sphere(sp.Colors.White, transform=sp.Transforms.scale(0.02))
-        samples.enable_instancing(positions=positions, colors=colors)
+        samples.enable_instancing(positions=positions[not_empty],
+                                  colors=colors[not_empty])
+
+        empty_samples = scene.create_mesh(layer_id="empty",
+                                          shared_color=sp.Colors.Gray)
+        empty_samples.add_sphere(transform=sp.Transforms.scale(0.02))
+        empty_samples.enable_instancing(positions=positions[empty])
 
         frame = canvas.create_frame()
         frame.camera = camera.to_scenepic()
         frame.add_mesh(samples)
+        frame.add_mesh(empty_samples)
         frame.add_mesh(frustums)
         for mesh in image_meshes:
             frame.add_mesh(mesh)

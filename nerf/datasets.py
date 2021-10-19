@@ -207,7 +207,7 @@ class VoxelDataset(TensorDataset):
         points = torch.from_numpy(points)
         points = points.expand(len(cameras), -1, -1)
         points = points.unsqueeze(-2)
-        occupancy = F.grid_sample(masks, points, align_corners=False,
+        occupancy = F.grid_sample(masks, points, align_corners=True,
                                   padding_mode="zeros")
         occupancy = occupancy.reshape(-1)
 
@@ -224,21 +224,26 @@ class VoxelDataset(TensorDataset):
         TensorDataset.__init__(self, t_stops, leaves, occupancy)
 
 
-@njit
 def _determine_weights(leaves: np.ndarray,
+                       t_starts: np.ndarray,
+                       t_ends: np.ndarray,
                        voxel_weights: np.ndarray) -> np.ndarray:
     num_rays, path_length = leaves.shape
-    sampling_weights = np.zeros((num_rays, path_length), np.float32)
+    path_length = path_length - 1
+    sampling_weights = t_ends - t_starts
     for i in range(num_rays):
         if leaves[i, 0] == -1:
             sampling_weights[i] = 1 / path_length
             continue
 
+        weight_sum = np.sum(sampling_weights[i])
+        sampling_weights[i] /= weight_sum
+
         for j, leaf_index in enumerate(leaves[i]):
             if leaf_index == -1:
                 break
 
-            sampling_weights[i, j] = voxel_weights[leaf_index]
+            sampling_weights[i, j] = sampling_weights[i, j] * voxel_weights[leaf_index]
 
     return sampling_weights
 
@@ -267,20 +272,27 @@ def _sample_t_values(t_starts: np.ndarray, t_ends: np.ndarray,
 
 class RaySamplingDataset(Dataset):
     def __init__(self, images: np.ndarray, cameras: List[CameraInfo],
-                 voxels: OcTree, path_length: int, num_samples: int,
-                 resolution: int, voxel_weights: np.ndarray = None):
+                 num_samples: int, resolution: int, path_length: int = 128,
+                 voxels: OcTree = None, voxel_weights: np.ndarray = None,
+                 near=2.0, far=6.0, stratified=False):
         """Constructor.
 
         Args:
             images (np.ndarray): Images of the object from each camera
             cameras (List[CameraInfo]): List of all cameras in the scene
-            voxels (OcTree): The OcTree describing the voxellization
             path_length (int): The maximum number of voxels to intersect with
             num_samples (int): The number of samples to take per ray
             resolution (int): The ray sampling resolution
+            voxels (OcTree, optional): The OcTree describing the voxellization
             voxel_weights (np.ndarray, optional): Per-voxel weights to use for
                                                   sampling. Defaults to None
                                                   (i.e. uniform)
+            near (float, optional): Near value to use when performing uniform
+                                    sampling along rays
+            far (float, optional): Far value to use when performing uniform
+                                   sampling along rays
+            stratified (bool, optional): Whether to use stratified random
+                                         sampling
         """
         assert len(images.shape) == 4
         assert len(images) == len(cameras)
@@ -290,9 +302,6 @@ class RaySamplingDataset(Dataset):
         images = images.transpose(0, 3, 1, 2)
         images = torch.from_numpy(images)
 
-        if voxel_weights is None:
-            voxel_weights = np.ones(voxels.num_leaves, np.float32)
-
         print("Casting rays...")
         x_vals = np.linspace(-1, 1, resolution)
         y_vals = np.linspace(-1, 1, resolution)
@@ -301,42 +310,52 @@ class RaySamplingDataset(Dataset):
         start = time.time()
         starts = []
         directions = []
-        t_stops = []
+        t_starts = []
+        t_ends = []
         weights = []
         for camera in cameras:
             print(camera.name)
             cam_starts, cam_directions = camera.raycast(points)
             starts.append(cam_starts)
             directions.append(cam_directions)
-            path = voxels.intersect(cam_starts, cam_directions, path_length)
-            t_stops.append(path.t_stops)
-            weights.append(_determine_weights(path.leaves, voxel_weights))
+            if voxels is not None:
+                path = voxels.intersect(cam_starts, cam_directions, path_length)
+                t_starts.append(path.t_stops[:, :-1])
+                t_ends.append(path.t_stops[:, 1:])
+                weights.append(_determine_weights(path.leaves, t_starts[-1],
+                                                  t_ends[-1], voxel_weights))
 
         points = torch.from_numpy(points)
         points = points.expand(len(cameras), -1, -1)
         points = points.unsqueeze(-2)
-        colors = F.grid_sample(images, points, align_corners=False,
+        colors = F.grid_sample(images, points, align_corners=True,
                                padding_mode="zeros")
         colors = colors.transpose(1, 2)
-        self.colors = colors.reshape(-1, 3)
+        self.colors = torch.clamp(colors.reshape(-1, 3), 0, 1)
 
         starts = np.concatenate(starts)
         directions = np.concatenate(directions)
-        t_stops = np.concatenate(t_stops)
-        weights = np.concatenate(weights)
 
         self.starts = torch.from_numpy(starts)
         self.directions = torch.from_numpy(directions)
-        self.t_starts = t_stops[:, :-1]
-        self.t_ends = t_stops[:, 1:]
-        self.weights = weights[:, :-1]
+        if voxels is None:
+            self.uniform_sampling = True
+            self.near = near
+            self.far = far
+            self.stratified = stratified
+        else:
+            self.t_starts = np.concatenate(t_starts)
+            self.t_ends = np.concatenate(t_ends)
+            self.weights = np.concatenate(weights)
 
         passed = time.time() - start
         self.resolution = resolution
-        self.num_rays = len(t_stops)
+        self.num_rays = len(self.colors)
         self.num_samples = num_samples
-        print(passed, "elapsed,", self.num_rays, "rays at",
-              passed / self.num_rays, "s/ray")
+
+        if not self.uniform_sampling:
+            print(passed, "elapsed,", self.num_rays, "rays at",
+                  passed / self.num_rays, "s/ray")
 
     def __len__(self) -> int:
         return self.num_rays
@@ -354,11 +373,25 @@ class RaySamplingDataset(Dataset):
         starts = self.starts[idx]
         directions = self.directions[idx]
 
-        t_starts = self.t_starts[idx]
-        t_ends = self.t_ends[idx]
-        weights = self.weights[idx]
+        if self.uniform_sampling:
+            t_values = np.linspace(self.near, self.far, self.num_samples,
+                                   dtype=np.float32)
+            t_values = t_values.reshape(1, self.num_samples)
+            if self.stratified:
+                scale = (self.far - self.near) / self.num_samples
+                permute = np.random.uniform(size=(num_rays, self.num_samples))
+                permute = (permute * scale).astype(np.float32)
+            else:
+                permute = np.zeros((num_rays, self.num_samples), np.float32)
 
-        t_values = _sample_t_values(t_starts, t_ends, weights, self.num_samples)
+            t_values = t_values + permute
+        else:
+            t_starts = self.t_starts[idx]
+            t_ends = self.t_ends[idx]
+            weights = self.weights[idx]
+
+            t_values = _sample_t_values(t_starts, t_ends, weights, self.num_samples)
+
         starts = starts.reshape(num_rays, 1, 3)
         directions = directions.reshape(num_rays, 1, 3)
         t_values = torch.from_numpy(t_values)

@@ -8,7 +8,8 @@ import torch.nn as nn
 
 class MLP(nn.Module):
     """Class representing a version of NeRF without any positional encoding."""
-    def __init__(self, num_inputs: int, num_outputs: int, num_channels=256):
+    def __init__(self, num_inputs: int, num_outputs: int, num_channels=256,
+                 output_act=None):
         """Constructor.
 
         Args:
@@ -16,8 +17,11 @@ class MLP(nn.Module):
             num_outputs (int): Number of dimensions in the output
             num_channels (int, optional): Number of channels in the MLP.
                                           Defaults to 256.
+            output_act (Callable, optional): Optional output activation.
+                                             Defaults to None.
         """
         nn.Module.__init__(self)
+        self.output_act = output_act
         self.input = nn.Linear(num_inputs, num_channels)
         self.hidden0 = nn.Linear(num_channels, num_channels)
         self.hidden1 = nn.Linear(num_channels, num_channels)
@@ -32,14 +36,35 @@ class MLP(nn.Module):
         output = torch.relu(self.input(uv))
         output = torch.relu(self.hidden0(output))
         output = torch.relu(self.hidden1(output))
-        output = torch.sigmoid(self.output(output))
-        return output
+        raw_output = self.output(output)
+        if self.output_act is None:
+            return raw_output
+
+        return self.output_act(raw_output)
+
+    def save(self, path: str):
+        """Saves the model to the specified path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: str):
+        """Loads the model from the provided path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        self.load_state_dict(torch.load(path))
+        self.eval()
 
 
 class BasicFourierMLP(nn.Module):
     """Basic version of NeRF in which inputs are projected onto the unit circle."""
 
-    def __init__(self, num_inputs: int, num_outputs: int, num_channels=256):
+    def __init__(self, num_inputs: int, num_outputs: int, num_channels=256,
+                 output_act=None):
         """Constructor.
 
         Args:
@@ -47,8 +72,11 @@ class BasicFourierMLP(nn.Module):
             num_outputs (int): Number of dimensions in the output
             num_channels (int, optional): Number of channels in the MLP.
                                           Defaults to 256.
+            output_act (Callable, optional): Optional output activation.
+                                             Defaults to None.
         """
         nn.Module.__init__(self)
+        self.output_act = output_act
         self.input = nn.Linear(num_inputs * 2, num_channels)
         self.hidden0 = nn.Linear(num_channels, num_channels)
         self.hidden1 = nn.Linear(num_channels, num_channels)
@@ -65,14 +93,34 @@ class BasicFourierMLP(nn.Module):
         output = torch.relu(self.input(encoded))
         output = torch.relu(self.hidden0(output))
         output = torch.relu(self.hidden1(output))
-        output = torch.sigmoid(self.output(output))
-        return output
+        raw_output = self.output(output)
+        if self.output_act is None:
+            return raw_output
+
+        return self.output_act(raw_output)
+
+    def save(self, path: str):
+        """Saves the model to the specified path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: str):
+        """Loads the model from the provided path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        self.load_state_dict(torch.load(path))
+        self.eval()
 
 
 class PositionalFourierMLP(nn.Module):
     """Version of NeRF with positional encoding."""
     def __init__(self, num_inputs: int, num_outputs: int, sigma: float,
-                 num_channels=256, num_frequencies=256):
+                 num_channels=256, num_frequencies=256, output_act=None):
         """Constructor.
 
         Args:
@@ -83,11 +131,14 @@ class PositionalFourierMLP(nn.Module):
                                           Defaults to 256.
             num_frequencies (int, optional): Number of frequencies to use for
                                              the encoding. Defaults to 256.
+            output_act (Callable, optional): Optional output activation.
+                                             Defaults to None.
         """
         nn.Module.__init__(self)
         frequencies = [2 * math.pi * math.pow(sigma, j / num_frequencies) for j in range(num_frequencies)]
         frequencies = torch.FloatTensor(frequencies)
         self.num_inputs = num_inputs
+        self.output_act = output_act
         self.frequencies = nn.Parameter(frequencies, requires_grad=False)
         self.input = nn.Linear(num_frequencies * 2 * num_inputs, num_channels)
         self.hidden0 = nn.Linear(num_channels, num_channels)
@@ -109,15 +160,35 @@ class PositionalFourierMLP(nn.Module):
         output = torch.relu(self.input(encoded))
         output = torch.relu(self.hidden0(output))
         output = torch.relu(self.hidden1(output))
-        output = torch.sigmoid(self.output(output))
-        return output
+        raw_output = self.output(output)
+        if self.output_act is None:
+            return raw_output
+
+        return self.output_act(raw_output)
+
+    def save(self, path: str):
+        """Saves the model to the specified path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: str):
+        """Loads the model from the provided path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        self.load_state_dict(torch.load(path))
+        self.eval()
 
 
 class GaussianFourierMLP(nn.Module):
     """Version of NeRF using a full Gaussian matrix for encoding."""
 
     def __init__(self, num_inputs: int, num_outputs: int, sigma: float,
-                 num_channels=256, num_frequencies=256):
+                 num_channels=256, num_frequencies=256, output_act=None):
         """Constructor.
 
         Args:
@@ -129,9 +200,12 @@ class GaussianFourierMLP(nn.Module):
                                           Defaults to 256.
             num_frequencies (int, optional): Number of frequencies to use for
                                              the encoding. Defaults to 256.
+            output_act (Callable, optional): Optional output activation.
+                                             Defaults to None.
         """
         nn.Module.__init__(self)
         self.num_inputs = num_inputs
+        self.output_act = output_act
         frequencies = torch.normal(0, sigma, size=(num_inputs, num_frequencies))
         frequencies *= 2 * math.pi
         self.frequencies = nn.Parameter(frequencies, requires_grad=False)
@@ -155,12 +229,25 @@ class GaussianFourierMLP(nn.Module):
         output = torch.relu(self.input(encoded))
         output = torch.relu(self.hidden0(output))
         output = torch.relu(self.hidden1(output))
-        output = torch.sigmoid(self.output(output))
-        return output
+        raw_output = self.output(output)
+        if self.output_act is None:
+            return raw_output
+
+        return self.output_act(raw_output)
 
     def save(self, path: str):
+        """Saves the model to the specified path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
         torch.save(self.state_dict(), path)
 
     def load(self, path: str):
+        """Loads the model from the provided path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
         self.load_state_dict(torch.load(path))
         self.eval()
