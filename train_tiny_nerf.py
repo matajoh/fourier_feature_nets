@@ -80,7 +80,8 @@ class TinyNeRF(nn.Module):
             if self._val_index * num_rays == len(self.val_dataset):
                 self._val_index = 0
             
-    def fit(self, batch_size: int, learning_rate: float, num_epochs: int):
+    def fit(self, batch_size: int, learning_rate: float, num_epochs: int,
+            reporting_interval: int):
         optim = torch.optim.Adam(self.model.parameters(), learning_rate)
         for epoch in range(num_epochs):
             print("Epoch", epoch)
@@ -97,7 +98,7 @@ class TinyNeRF(nn.Module):
                 loss.backward()
                 optim.step()
 
-                if step % 50 == 0:
+                if step % reporting_interval == 0:
                     print(step, "loss:", loss.item())
                     self._val_image(epoch, step, batch_size)
 
@@ -133,6 +134,10 @@ def _parse_args():
     parser.add_argument("--learning-rate", type=float, default=5e-4)
     parser.add_argument("--gauss-sigma", type=float, default=6.05,
                         help="Value of sigma for the gaussian model")
+    parser.add_argument("--num-epochs", type=int, default=100,
+                        help="Number of epochs to use for training.")
+    parser.add_argument("--report-interval", type=int, default=100,
+                        help="Reporting interval for validation/logging")
     return parser.parse_args()
 
 
@@ -161,7 +166,8 @@ def _main():
     trainer = TinyNeRF(train_dataset, val_dataset, model, args.results_dir)
     trainer.to("cuda")
 
-    trainer.fit(1024, args.learning_rate, 10)
+    trainer.fit(args.batch_size, args.learning_rate,
+                args.num_epochs, args.reporting_interval)
 
 
 if __name__ == "__main__":
