@@ -190,8 +190,8 @@ class VoxelDataset(TensorDataset):
         masks = masks.unsqueeze(1)
 
         print("Casting rays...")
-        x_vals = np.linspace(-1, 1, resolution)
-        y_vals = np.linspace(-1, 1, resolution)
+        x_vals = np.arange(resolution)
+        y_vals = np.arange(resolution)
         points = np.stack(np.meshgrid(x_vals, y_vals), -1).reshape(1, -1, 2)
         points = points.astype(np.float32)
         start = time.time()
@@ -270,6 +270,18 @@ def _sample_t_values(t_starts: np.ndarray, t_ends: np.ndarray,
     return t_values
 
 
+class RaySamples(namedtuple("RaySample", ["positions", "view_directions",
+                                          "deltas", "colors", "t_values"])):
+    def to(self, *args) -> "RaySamples":
+        return RaySamples(
+            self.positions.to(*args),
+            self.view_directions.to(*args),
+            self.deltas.to(*args),
+            self.colors.to(*args),
+            self.t_values.to(*args),
+        )
+
+
 class RaySamplingDataset(Dataset):
     def __init__(self, images: np.ndarray, cameras: List[CameraInfo],
                  num_samples: int, resolution: int, path_length: int = 128,
@@ -299,25 +311,37 @@ class RaySamplingDataset(Dataset):
         if images.dtype == np.uint8:
             images = images.astype(np.float32) / 255
 
-        images = images.transpose(0, 3, 1, 2)
-        images = torch.from_numpy(images)
-
         print("Casting rays...")
-        x_vals = np.linspace(-1, 1, resolution)
-        y_vals = np.linspace(-1, 1, resolution)
-        points = np.stack(np.meshgrid(x_vals, y_vals), -1).reshape(1, -1, 2)
-        points = points.astype(np.float32)
+        source_resolution = images.shape[1]
+        scale = source_resolution / resolution
+
+        crop_start = source_resolution // 4
+        crop_end = source_resolution - crop_start
+        x_vals = ((np.arange(0, resolution) + 0.5) * scale).astype(np.int32)
+        y_vals = ((np.arange(0, resolution) + 0.5) * scale).astype(np.int32)
+        points = np.stack(np.meshgrid(x_vals, y_vals), -1)
+        points = points.reshape(-1, 2)
+
+        inside_crop = (points >= crop_start) & (points <= crop_end)
+        inside_crop = inside_crop.all(-1)
+        crop_points = np.nonzero(inside_crop)[0]
+
         start = time.time()
         starts = []
         directions = []
         t_starts = []
         t_ends = []
+        colors = []
         weights = []
-        for camera in cameras:
+        crop_index = []
+        for camera, image in zip(cameras, images):
             print(camera.name)
             cam_starts, cam_directions = camera.raycast(points)
+            cam_colors = image[points[:, 1], points[:, 0]].reshape(-1, 3)
             starts.append(cam_starts)
             directions.append(cam_directions)
+            colors.append(cam_colors)
+            crop_index.append(crop_points + len(crop_index) * len(points))
             if voxels is not None:
                 path = voxels.intersect(cam_starts, cam_directions, path_length)
                 t_starts.append(path.t_stops[:, :-1])
@@ -325,19 +349,15 @@ class RaySamplingDataset(Dataset):
                 weights.append(_determine_weights(path.leaves, t_starts[-1],
                                                   t_ends[-1], voxel_weights))
 
-        points = torch.from_numpy(points)
-        points = points.expand(len(cameras), -1, -1)
-        points = points.unsqueeze(-2)
-        colors = F.grid_sample(images, points, align_corners=True,
-                               padding_mode="zeros")
-        colors = colors.transpose(1, 2)
-        self.colors = torch.clamp(colors.reshape(-1, 3), 0, 1)
-
         starts = np.concatenate(starts)
         directions = np.concatenate(directions)
+        colors = np.concatenate(colors)
+        crop_index = np.concatenate(crop_index)
 
         self.starts = torch.from_numpy(starts)
         self.directions = torch.from_numpy(directions)
+        self.colors = torch.from_numpy(colors)
+        self.crop_index = torch.from_numpy(crop_index)
         if voxels is None:
             self.uniform_sampling = True
             self.near = near
@@ -349,6 +369,7 @@ class RaySamplingDataset(Dataset):
             self.weights = np.concatenate(weights)
 
         passed = time.time() - start
+        self.center_crop = False
         self.resolution = resolution
         self.num_rays = len(self.colors)
         self.num_samples = num_samples
@@ -358,11 +379,17 @@ class RaySamplingDataset(Dataset):
                   passed / self.num_rays, "s/ray")
 
     def __len__(self) -> int:
+        if self.center_crop:
+            return len(self.crop_index)
+
         return self.num_rays
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
+
+        if self.center_crop:
+            idx = [int(self.crop_index[i]) for i in idx]
 
         if isinstance(idx, list):
             num_rays = len(idx)
@@ -404,4 +431,4 @@ class RaySamplingDataset(Dataset):
 
         colors = self.colors[idx]
 
-        return positions, -directions, deltas, colors
+        return RaySamples(positions, -directions, deltas, colors, t_values)

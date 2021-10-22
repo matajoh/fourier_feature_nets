@@ -83,9 +83,6 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "intrinsics", "
         projection[:3, :3] = self.intrinsics
         projection = projection @ np.linalg.inv(self.extrinsics)
         unprojection = np.linalg.inv(projection)
-        center = (np.array(self.resolution, np.float32) - 1) / 2
-        center = center.reshape(1, 1, 2)
-        points = (points * center) + center
         h_coords = points.reshape(-1, 2)
         h_coords = np.concatenate([h_coords, np.ones((h_coords.shape[0], 2), np.float32)], axis=-1)
         return (unprojection @ h_coords.T).T
@@ -99,9 +96,6 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "intrinsics", "
         h_coords = np.concatenate([positions, ones], -1)
         points = (projection @ h_coords.T).T
         points = points[:, :2] / points[:, 2:3]
-        center = (np.array(self.resolution, np.float32) - 1) / 2
-        center = center.reshape(1, 1, 2)
-        points = (points - center) / center
         return points
 
     @property
@@ -116,6 +110,7 @@ class CameraInfo(namedtuple("CameraInfo", ["name", "resolution", "intrinsics", "
             znear: the z distance of the ray starting point (default: 1)
             zfar: the z distance of the ray ending point (default: 100)
         """
+        points = points.astype(np.float32)
         world_coords = self.unproject(points)
         camera_pos = self.position
         ray_dir = normalize(world_coords[:, :3] - camera_pos)

@@ -59,8 +59,8 @@ class VolumeCarver(nn.Module):
         return output
 
     def _val_image(self, camera: CameraInfo) -> np.ndarray:
-        x_vals = np.linspace(-1, 1, self._resolution)
-        y_vals = np.linspace(-1, 1, self._resolution)
+        x_vals = np.arange(self._resolution)
+        y_vals = np.arange(self._resolution)
         points = np.stack(np.meshgrid(x_vals, y_vals), -1).reshape(-1, 2)
         starts, directions = camera.raycast(points)
         t_stops, leaves = self.voxels.intersect(starts, directions,
