@@ -10,6 +10,7 @@ from .models import (
     PositionalFourierMLP
 )
 from .octree import OcTree
+from .raycaster import Raycaster
 from .triangulation import Triangulation
 from .volume_carving import VolumeCarver
 
@@ -23,6 +24,7 @@ __all__ = ["CameraInfo",
            "OcTree",
            "PixelDataset",
            "VoxelDataset",
+           "Raycaster",
            "RaySamples",
            "RaySamplingDataset",
            "Triangulation",

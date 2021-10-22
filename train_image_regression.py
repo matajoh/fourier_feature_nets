@@ -27,6 +27,8 @@ def _parse_args():
     parser.add_argument("--gauss-sigma", type=float, default=10,
                         help="Value of sigma for the gaussian model")
     parser.add_argument("--num-steps", type=int, default=2000)
+    parser.add_argument("--learning-rate", type=float, default=1e-3,
+                        help="Learning rate for the optimizer")
     return parser.parse_args()
 
 
@@ -43,26 +45,30 @@ def _main():
     dataset = dataset.to("cuda")
 
     if args.nerf_model == "mlp":
-        model = nerf.MLP(2, 3, args.num_channels,
+        model = nerf.MLP(2, 3,
+                         num_channels=args.num_channels,
                          output_act=torch.sigmoid)
     elif args.nerf_model == "basic":
-        model = nerf.BasicFourierMLP(2, 3, args.num_channels,
+        model = nerf.BasicFourierMLP(2, 3,
+                                     num_channels=args.num_channels,
                                      output_act=torch.sigmoid)
     elif args.nerf_model == "positional":
-        model = nerf.PositionalFourierMLP(2, 3, args.pos_sigma,
-                                          args.num_channels,
-                                          args.num_frequencies,
+        model = nerf.PositionalFourierMLP(2, 3,
+                                          sigma=args.pos_sigma,
+                                          num_channels=args.num_channels,
+                                          num_frequencies=args.num_frequencies,
                                           output_act=torch.sigmoid)
     elif args.nerf_model == "gaussian":
-        model = nerf.GaussianFourierMLP(2, 3, args.gauss_sigma,
-                                        args.num_channels,
-                                        args.num_frequencies,
+        model = nerf.GaussianFourierMLP(2, 3,
+                                        sigma=args.gauss_sigma,
+                                        num_channels=args.num_channels,
+                                        num_frequencies=args.num_frequencies,
                                         output_act=torch.sigmoid)
     else:
         raise NotImplementedError("Unsupported model: {}".format(args.nerf_model))
 
     model = model.to("cuda")
-    optim = torch.optim.Adam(model.parameters(), 1e-3)
+    optim = torch.optim.Adam(model.parameters(), args.learning_rate)
     for step in range(args.num_steps):
         if step % 25 == 0:
             with torch.no_grad():
@@ -74,7 +80,7 @@ def _main():
 
         optim.zero_grad()
         output = model(dataset.train_uv)
-        train_loss = torch.square(output - dataset.train_color).sum()
+        train_loss = torch.square(output - dataset.train_color).mean()
         train_loss.backward()
         optim.step()
 

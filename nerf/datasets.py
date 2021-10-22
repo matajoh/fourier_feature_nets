@@ -2,12 +2,15 @@
 
 from collections import namedtuple
 import math
+import sys
 import time
 from typing import List
 
 import cv2
+from matplotlib.pyplot import get_cmap
 from numba import njit
 import numpy as np
+import scenepic as sp
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, TensorDataset
@@ -322,7 +325,7 @@ class RaySamplingDataset(Dataset):
         points = np.stack(np.meshgrid(x_vals, y_vals), -1)
         points = points.reshape(-1, 2)
 
-        inside_crop = (points >= crop_start) & (points <= crop_end)
+        inside_crop = (points >= crop_start) & (points < crop_end)
         inside_crop = inside_crop.all(-1)
         crop_points = np.nonzero(inside_crop)[0]
 
@@ -373,6 +376,8 @@ class RaySamplingDataset(Dataset):
         self.resolution = resolution
         self.num_rays = len(self.colors)
         self.num_samples = num_samples
+        self.images = images
+        self.cameras = cameras
 
         if not self.uniform_sampling:
             print(passed, "elapsed,", self.num_rays, "rays at",
@@ -432,3 +437,108 @@ class RaySamplingDataset(Dataset):
         colors = self.colors[idx]
 
         return RaySamples(positions, -directions, deltas, colors, t_values)
+
+    @staticmethod
+    def load(path: str, split: str, resolution: int,
+             num_samples: int, stratified: bool) -> "RaySamplingDataset":
+        if split == "train":
+            idx = list(range(100))
+        elif split == "val":
+            idx = list(range(100, 107))
+        elif split == "test":
+            idx = list(range(107, 120))
+        else:
+            print("Unrecognized split:", split)
+
+        data = np.load(path)
+        images = data["images"]
+        poses = data["poses"]
+        focal_length = data["focal"]
+        num_images, height, width = images.shape[:3]
+        assert num_images == 120
+
+        cameras = []
+        for i, pose in enumerate(poses[idx]):
+            name = "{}{:02}".format(split, i)
+            intrinsics = np.array([
+                [focal_length, 0, width // 2],
+                [0, focal_length, height // 2],
+                [0, 0, 1]
+            ])
+            camera_to_world = np.array(pose, np.float32)
+            camera_to_world = camera_to_world @ sp.Transforms.rotation_about_x(np.pi)
+            cameras.append(CameraInfo.create(name, (width, height),
+                                             intrinsics, camera_to_world))
+
+        images = images[idx, :, :, :3]
+        return RaySamplingDataset(images, cameras, num_samples, resolution,
+                                  stratified=stratified)
+
+    def to_scenepic(self) -> sp.Scene:
+        scene = sp.Scene()
+        frustums = scene.create_mesh("frustums", layer_id="frustums")
+        canvas = scene.create_canvas_3d(width=800,
+                                        height=800)
+        canvas.shading = sp.Shading(sp.Colors.Gray)
+
+        cmap = get_cmap("jet")
+        camera_colors = cmap(np.linspace(0, 1, len(self.cameras)))[:, :3]
+        image_meshes = []
+        sys.stdout.write("Adding cameras")
+        for pixels, camera, color in zip(self.images, self.cameras, camera_colors):
+            sys.stdout.write(".")
+            sys.stdout.flush()
+            camera = camera.to_scenepic()
+
+            image = scene.create_image()
+            pixels = cv2.resize(pixels, (200, 200), cv2.INTER_AREA)
+            image.from_numpy(pixels)
+            mesh = scene.create_mesh(layer_id="images", texture_id=image.image_id,
+                                     double_sided=True)
+            mesh.add_camera_image(camera, depth=0.5)
+            image_meshes.append(mesh)
+
+            frustums.add_camera_frustum(camera, color, depth=0.5, thickness=0.01)
+
+        print("done.")
+
+        sys.stdout.write("Sampling rays...")
+        num_rays = self.resolution * self.resolution
+        for i, camera in enumerate(self.cameras):
+            sys.stdout.write(".")
+            sys.stdout.flush()
+            start = i * num_rays
+            end = start + num_rays
+            index = [i for i in range(start, end)]
+            ray_samples = self[index]
+
+            colors = ray_samples.colors.unsqueeze(1)
+            colors = colors.expand(-1, self.num_samples, -1)
+            positions = ray_samples.positions.numpy().reshape(-1, 3)
+            colors = colors.numpy().copy().reshape(-1, 3)
+
+            empty = (colors == 0).sum(-1) == 3
+            not_empty = np.logical_not(empty)
+
+            samples = scene.create_mesh()
+            samples.add_sphere(sp.Colors.White, transform=sp.Transforms.scale(0.02))
+            samples.enable_instancing(positions=positions[not_empty],
+                                      colors=colors[not_empty])
+
+            empty_samples = scene.create_mesh(layer_id="empty",
+                                              shared_color=sp.Colors.Black)
+            empty_samples.add_sphere(transform=sp.Transforms.scale(0.02))
+            empty_samples.enable_instancing(positions=positions[empty])
+
+            frame = canvas.create_frame()
+            frame.camera = camera.to_scenepic()
+            frame.add_mesh(samples)
+            frame.add_mesh(empty_samples)
+            frame.add_mesh(frustums)
+            for mesh in image_meshes:
+                frame.add_mesh(mesh)
+
+        print("done.")
+
+        scene.framerate = 10
+        return scene
