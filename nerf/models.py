@@ -149,18 +149,17 @@ class PositionalFourierMLP(FourierFeatureMLP):
                                              Defaults to None.
         """
         num_steps = num_frequencies // num_inputs
-        frequencies_matrix = 2 ** torch.linspace(0, sigma, num_steps) - 1
+        frequencies_matrix = 2 ** torch.linspace(0, sigma * 2 * math.pi, num_steps) - 1
         frequencies_matrix = frequencies_matrix.reshape(-1, 1, 1)
         frequencies_matrix = torch.eye(num_inputs) * frequencies_matrix
         frequencies_matrix = frequencies_matrix.reshape(-1, num_inputs)
-        frequencies_matrix = frequencies_matrix * 2 * math.pi
         frequencies_matrix = frequencies_matrix.transpose(0, 1)
         FourierFeatureMLP.__init__(self, num_inputs, num_outputs,
                                    frequencies_matrix, num_layers,
                                    num_channels, output_act)
 
 
-class GaussianFourierMLP(nn.Module):
+class GaussianFourierMLP(FourierFeatureMLP):
     """Version of a FFN using a full Gaussian matrix for encoding."""
 
     def __init__(self, num_inputs: int, num_outputs: int, sigma: float,

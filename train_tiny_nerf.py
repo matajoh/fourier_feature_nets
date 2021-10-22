@@ -40,6 +40,8 @@ def _parse_args():
                         help="Number of epochs to train on center crops")
     parser.add_argument("--seed", type=int, default=20080524,
                         help="Manual seed for the RNG")
+    parser.add_argument("--use-alpha", action="store_true",
+                        help="Whether to use the alpha channel as a target")
     return parser.parse_args()
 
 
@@ -58,7 +60,7 @@ def _main():
     elif args.nerf_model == "gaussian":
         model = nerf.GaussianFourierMLP(3, 4, sigma=args.gauss_sigma,
                                         num_channels=args.num_channels,
-                                        num_frequences=args.num_frequencies)
+                                        num_frequencies=args.num_frequencies)
 
     train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
                                                  args.resolution,

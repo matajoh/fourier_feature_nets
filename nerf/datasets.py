@@ -166,8 +166,8 @@ class PixelDataset:
         Returns:
             float: the computed PSNR
         """
-        mse = torch.square(255 * (colors - self.val_color)).mean().item()
-        return 20 * math.log10(255) - 10 * math.log10(mse)
+        mse = torch.square(colors - self.val_color).mean().item()
+        return -10 * math.log10(mse)
 
 
 class VoxelDataset(TensorDataset):
@@ -274,13 +274,15 @@ def _sample_t_values(t_starts: np.ndarray, t_ends: np.ndarray,
 
 
 class RaySamples(namedtuple("RaySample", ["positions", "view_directions",
-                                          "deltas", "colors", "t_values"])):
+                                          "deltas", "colors", "alphas",
+                                          "t_values"])):
     def to(self, *args) -> "RaySamples":
         return RaySamples(
             self.positions.to(*args),
             self.view_directions.to(*args),
             self.deltas.to(*args),
             self.colors.to(*args),
+            self.alphas.to(*args),
             self.t_values.to(*args),
         )
 
@@ -335,15 +337,21 @@ class RaySamplingDataset(Dataset):
         t_starts = []
         t_ends = []
         colors = []
+        alphas = []
         weights = []
         crop_index = []
         for camera, image in zip(cameras, images):
             print(camera.name)
             cam_starts, cam_directions = camera.raycast(points)
-            cam_colors = image[points[:, 1], points[:, 0]].reshape(-1, 3)
+            cam_colors = image[points[:, 1], points[:, 0]]
+            if image.shape[-1] == 4:
+                colors.append(cam_colors[..., :3].reshape(-1, 3))
+                alphas.append(cam_colors[..., 3].reshape(-1))
+            else:
+                colors.append(cam_colors.reshape(-1, 3))
+
             starts.append(cam_starts)
             directions.append(cam_directions)
-            colors.append(cam_colors)
             crop_index.append(crop_points + len(crop_index) * len(points))
             if voxels is not None:
                 path = voxels.intersect(cam_starts, cam_directions, path_length)
@@ -360,6 +368,13 @@ class RaySamplingDataset(Dataset):
         self.starts = torch.from_numpy(starts)
         self.directions = torch.from_numpy(directions)
         self.colors = torch.from_numpy(colors)
+
+        if len(alphas) > 0:
+            alphas = np.concatenate(alphas)
+            self.alphas = torch.from_numpy(alphas)
+        else:
+            self.alphas = None
+
         self.crop_index = torch.from_numpy(crop_index)
         if voxels is None:
             self.uniform_sampling = True
@@ -435,8 +450,13 @@ class RaySamplingDataset(Dataset):
         deltas = deltas.unsqueeze(-1)
 
         colors = self.colors[idx]
+        if len(self.alphas) > 0:
+            alphas = self.alphas[idx]
+        else:
+            alphas = None
 
-        return RaySamples(positions, -directions, deltas, colors, t_values)
+        return RaySamples(positions, -directions, deltas,
+                          colors, alphas, t_values)
 
     @staticmethod
     def load(path: str, split: str, resolution: int,
@@ -470,7 +490,7 @@ class RaySamplingDataset(Dataset):
             cameras.append(CameraInfo.create(name, (width, height),
                                              intrinsics, camera_to_world))
 
-        images = images[idx, :, :, :3]
+        images = images[idx]
         return RaySamplingDataset(images, cameras, num_samples, resolution,
                                   stratified=stratified)
 

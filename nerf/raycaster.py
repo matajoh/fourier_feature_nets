@@ -23,6 +23,7 @@ class Raycaster(nn.Module):
         self.val_dataset = val_dataset
         self._results_dir = results_dir
         self._val_index = 0
+        self._use_alpha = train_dataset.alphas is not None
 
         if not os.path.exists(results_dir):
             os.makedirs(results_dir)
@@ -47,15 +48,21 @@ class Raycaster(nn.Module):
         output_color = weights * color
         output_color = output_color.sum(-2)
 
-        output_depth = weights.squeeze(-1) * ray_samples.t_values
-        output_depth = output_depth.sum(-1)
-        return output_color, output_depth
+        with torch.no_grad():
+            output_depth = weights.squeeze(-1) * ray_samples.t_values
+            output_depth = output_depth.sum(-1)
+
+        output_alpha = weights.squeeze(-1).sum(-1)
+        return output_color, output_alpha, output_depth
 
     def _loss(self, ray_samples: RaySamples) -> torch.Tensor:
         device = next(self.model.parameters()).device
         ray_samples = ray_samples.to(device)
-        colors, _ = self.render(ray_samples)
+        colors, alphas, _ = self.render(ray_samples)
         loss = (colors - ray_samples.colors).square().mean()
+        if self._use_alpha:
+            loss += (alphas - ray_samples.alphas).square().mean()
+
         return loss
 
     def _val_image(self, step: int, batch_size: int):
@@ -76,10 +83,17 @@ class Raycaster(nn.Module):
                 idx = list(range(start, end))
                 ray_samples = self.val_dataset[idx]
                 ray_samples = ray_samples.to(device)
-                pred_colors, pred_depth = self.render(ray_samples)
-                pred_colors = pred_colors.detach().cpu().numpy()
+                pred_colors, pred_alphas, pred_depth = self.render(ray_samples)
+                pred_colors = pred_colors.cpu().numpy()
                 act_colors = ray_samples.colors.cpu().numpy()
-                pred_error = np.square(act_colors - pred_colors)
+                pred_error = np.square(act_colors - pred_colors).sum(-1) / 3
+                if self._use_alpha:
+                    pred_alphas = pred_alphas.cpu().numpy()
+                    act_alphas = ray_samples.alphas.cpu().numpy()
+                    pred_error = 3 * pred_error
+                    pred_error += np.square(act_alphas - pred_alphas)
+                    pred_error /= 4
+
                 loss.append(np.mean(pred_error).item())
                 predicted.append(pred_colors)
                 actual.append(act_colors)
@@ -102,7 +116,7 @@ class Raycaster(nn.Module):
             depth = (depth * 255).astype(np.uint8)
 
             error = np.concatenate(error)
-            error = np.sqrt(error.sum(-1))
+            error = np.sqrt(error)
             error = (error / error.max()).reshape(resolution, resolution, 1)
             error = (error * 255).astype(np.uint8)
 
@@ -169,7 +183,7 @@ class Raycaster(nn.Module):
         return log
 
     def to_scenepic(self, num_cameras=10,
-                    resolution=64, num_samples=32) -> sp.Scene:
+                    resolution=50, num_samples=64) -> sp.Scene:
         dataset = RaySamplingDataset(self.val_dataset.images[:num_cameras],
                                      self.val_dataset.cameras[:num_cameras],
                                      num_samples,
