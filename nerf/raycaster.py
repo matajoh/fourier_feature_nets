@@ -131,7 +131,7 @@ class Raycaster(nn.Module):
             error = (error / error.max()).reshape(resolution, resolution, 1)
             error = (error * 255).astype(np.uint8)
 
-            name = "val_s{:03}_c{:03}.png".format(step, self._val_index)
+            name = "val_s{:07}_c{:03}.png".format(step, self._val_index)
             image_path = os.path.join(self._results_dir, name)
 
             compare = np.zeros((resolution*2, resolution*2, 3), np.uint8)
