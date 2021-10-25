@@ -10,6 +10,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+try:
+    from azureml.core import Run
+except ImportError:
+    Run = None
+    print("Unable to import AzureML, running as local experiment")
+
 from .datasets import RaySamples, RaySamplingDataset
 
 
@@ -24,6 +30,11 @@ class Raycaster(nn.Module):
         self._results_dir = results_dir
         self._val_index = 0
         self._use_alpha = train_dataset.alphas is not None
+
+        if Run:
+            self.run = Run.get_context()
+        else:
+            self.run = None
 
         if not os.path.exists(results_dir):
             os.makedirs(results_dir)
@@ -133,7 +144,7 @@ class Raycaster(nn.Module):
             if self._val_index * num_rays == len(self.val_dataset):
                 self._val_index = 0
 
-            return psnr
+            return psnr, image_path
 
     def fit(self, batch_size: int, learning_rate: float, num_steps: int,
             reporting_interval: int, crop_epochs: int):
@@ -165,7 +176,7 @@ class Raycaster(nn.Module):
                 optim.step()
 
                 if step % reporting_interval == 0:
-                    psnr = self._val_image(step, batch_size)
+                    psnr, image_path = self._val_image(step, batch_size)
                     current_time = time.time()
                     time_per_step = (current_time - timestamp) / reporting_interval
                     timestamp = current_time
@@ -173,6 +184,12 @@ class Raycaster(nn.Module):
                           "{:2f} s/step".format(time_per_step),
                           "loss: {:2f}".format(loss.item()),
                           "psnr: {:2f}".format(psnr))
+
+                    if self.run:
+                        self.run.log_image("val{:05}".format(step), image_path)
+                        self.run.log("psnr", psnr)
+                        self.run.log("loss", loss.item())
+                        self.run.log("time_per_step", time_per_step)
 
                     log.append((step, timestamp - start_time, psnr))
 
@@ -207,7 +224,7 @@ class Raycaster(nn.Module):
 
             image = scene.create_image()
             pixels = cv2.resize(pixels, (200, 200), cv2.INTER_AREA)
-            image.from_numpy(pixels)
+            image.from_numpy(pixels[..., :3])
             mesh = scene.create_mesh(layer_id="images", texture_id=image.image_id,
                                      double_sided=True)
             mesh.add_camera_image(camera, depth=0.5)

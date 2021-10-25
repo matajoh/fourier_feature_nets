@@ -61,7 +61,8 @@ def _main():
     if not os.path.exists(image_path):
         data_dir = os.path.join(os.path.dirname(__file__), "data")
         image_path = os.path.join(data_dir, image_path)
-        print("Image not found, looking at", image_path)
+        image_path = os.path.abspath(image_path)
+        print("Image not found, also trying", image_path)
 
     dataset = nerf.PixelDataset.create(image_path,
                                        args.color_space,
@@ -100,7 +101,6 @@ def _main():
 
     model = model.to("cuda")
     optim = torch.optim.Adam(model.parameters(), args.learning_rate)
-    log = []
     for step in range(args.num_steps):
         if step % args.report_interval == 0:
             with torch.no_grad():
@@ -108,7 +108,6 @@ def _main():
                 psnr = dataset.psnr(output)
                 print("step", step, dataset.psnr(output))
                 frame[:, args.image_size:] = dataset.to_image(output)
-                log.append((step, psnr))
                 image_path = os.path.join(args.results_dir,
                                           "val{:05}.png".format(step))
                 cv2.imwrite(image_path, frame)
@@ -148,6 +147,9 @@ def _main():
             run.log_image("val{:05}".format(args.num_steps), image_path)
             run.log_image("super-resolution", final_path)
             run.log("psnr", psnr)
+
+    model_path = os.path.join(args.results_dir, "model.pkl")
+    model.save(model_path)
 
 
 if __name__ == "__main__":

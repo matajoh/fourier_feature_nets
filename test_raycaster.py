@@ -116,7 +116,7 @@ def _main():
                 voxel_transform = sp.Transforms.scale(2 * scales[leaf])
                 voxel_transform = sp.Transforms.translate(positions[leaf]) @ voxel_transform
                 ray_voxel_mesh.add_cube(color, transform=voxel_transform)
-    
+
             frame = canvas.create_frame()
             frame.camera = sp_camera
             frame.add_mesh(ray_voxel_mesh)

@@ -14,7 +14,7 @@ def _parse_args():
     parser.add_argument("name", help="Name of the experiment")
     parser.add_argument("compute", help="Name of the compute target")
     parser.add_argument("script_path", help="Path to the script to run")
-    parser.add_argument("script_args", nargs="+")
+    parser.add_argument("script_args", help="The script args")
     env_default = "AzureML-pytorch-1.9-ubuntu18.04-py37-cuda11-gpu"
     parser.add_argument("--env",
                         default=env_default,
@@ -31,7 +31,7 @@ def _main():
     environment = Environment.from_conda_specification("training", env_path)
     config = ScriptRunConfig(source_directory=".",
                              script=args.script_path,
-                             arguments=args.script_args,
+                             arguments=args.script_args.split(),
                              compute_target=args.compute,
                              environment=environment)
 
