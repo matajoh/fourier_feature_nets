@@ -1,6 +1,7 @@
 """Script which trains 2D Fourier networks to predict image pixels."""
 
 import argparse
+import os
 
 import cv2
 import nerf
@@ -9,11 +10,19 @@ import torch
 import torch.optim
 
 
+try:
+    from azureml.core import Run
+except ImportError:
+    Run = None
+    print("Unable to import AzureML, running as local experiment")
+
+
 def _parse_args():
     parser = argparse.ArgumentParser("NeRF2D Image Trainer")
     parser.add_argument("image_path", help="Path to an image file")
     parser.add_argument("nerf_model", choices=["mlp", "basic",
                                                "positional", "gaussian"])
+    parser.add_argument("results_dir", help="Path to the results directory")
     parser.add_argument("--image-size", type=int, default=512,
                         help="Size of the square input image")
     parser.add_argument("--color-space", choices=["YCrCb", "RGB"],
@@ -29,18 +38,40 @@ def _parse_args():
     parser.add_argument("--num-steps", type=int, default=2000)
     parser.add_argument("--learning-rate", type=float, default=1e-3,
                         help="Learning rate for the optimizer")
+    parser.add_argument("--report-interval", type=int, default=50,
+                        help="Frequency of logging")
     return parser.parse_args()
 
 
 def _main():
     args = _parse_args()
 
+    if Run:
+        run = Run.get_context()
+    else:
+        run = None
+
+    is_offline = run is None or run.id.startswith("OfflineRun")
+
+    if not os.path.exists(args.results_dir):
+        os.makedirs(args.results_dir)
+
     print("Creating dataset...")
-    dataset = nerf.PixelDataset.create(args.image_path,
+    image_path = args.image_path
+    if not os.path.exists(image_path):
+        data_dir = os.path.join(os.path.dirname(__file__), "data")
+        image_path = os.path.join(data_dir, image_path)
+        print("Image not found, looking at", image_path)
+
+    dataset = nerf.PixelDataset.create(image_path,
                                        args.color_space,
                                        args.image_size)
-    frame = np.zeros((512, 1024, 3), np.uint8)
-    frame[:, :512] = dataset.image
+    if dataset is None:
+        print("Dataset unavailable, exiting.")
+        exit(1)
+
+    frame = np.zeros((args.image_size, 2*args.image_size, 3), np.uint8)
+    frame[:, :args.image_size] = dataset.image
 
     dataset = dataset.to("cuda")
 
@@ -69,14 +100,25 @@ def _main():
 
     model = model.to("cuda")
     optim = torch.optim.Adam(model.parameters(), args.learning_rate)
+    log = []
     for step in range(args.num_steps):
-        if step % 25 == 0:
+        if step % args.report_interval == 0:
             with torch.no_grad():
                 output = model(dataset.val_uv)
+                psnr = dataset.psnr(output)
                 print("step", step, dataset.psnr(output))
-                frame[:, 512:] = dataset.to_image(output)
-                cv2.imshow("progress", frame)
-                cv2.waitKey(1)
+                frame[:, args.image_size:] = dataset.to_image(output)
+                log.append((step, psnr))
+                image_path = os.path.join(args.results_dir,
+                                          "val{:05}.png".format(step))
+                cv2.imwrite(image_path, frame)
+                if run:
+                    run.log_image("val{:05}".format(step), image_path)
+                    run.log("psnr", psnr)
+
+                if is_offline:
+                    cv2.imshow("progress", frame)
+                    cv2.waitKey(1)
 
         optim.zero_grad()
         output = model(dataset.train_uv)
@@ -87,15 +129,25 @@ def _main():
     with torch.no_grad():
         output = model(dataset.val_uv)
         print("final", dataset.psnr(output))
-        frame[:, 512:] = dataset.to_image(output)
-        cv2.imshow("progress", frame)
+        frame[:, args.image_size:] = dataset.to_image(output)
+        image_path = os.path.join(args.results_dir,
+                                  "val{:05}.png".format(args.num_steps))
+        cv2.imwrite(image_path, frame)
 
-        uvs = nerf.PixelDataset.generate_uvs(1024, "cpu")
+        uvs = nerf.PixelDataset.generate_uvs(args.image_size * 2, "cpu")
         model = model.to("cpu")
         output = model(uvs)
-        image = dataset.to_image(output, 1024)
-        cv2.imshow("super-resolution", image)
-        cv2.waitKey()
+        image = dataset.to_image(output, args.image_size * 2)
+        final_path = os.path.join(args.results_dir, "superres.png")
+        cv2.imwrite(final_path, image)
+        if Run is None:
+            cv2.imshow("progress", frame)
+            cv2.imshow("super-resolution", frame)
+            cv2.waitKey()
+        else:
+            run.log_image("val{:05}".format(args.num_steps), image_path)
+            run.log_image("super-resolution", final_path)
+            run.log("psnr", psnr)
 
 
 if __name__ == "__main__":

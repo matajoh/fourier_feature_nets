@@ -132,3 +132,5 @@ dmypy.json
 .vscode
 *.html
 results
+config.json
+data/*.npz

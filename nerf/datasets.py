@@ -1,5 +1,6 @@
 """Module providing dataset classes for use in training NeRF models."""
 
+import base64
 from collections import namedtuple
 import math
 import sys
@@ -10,6 +11,7 @@ import cv2
 from matplotlib.pyplot import get_cmap
 from numba import njit
 import numpy as np
+import requests
 import scenepic as sp
 import torch
 import torch.nn.functional as F
@@ -17,6 +19,19 @@ from torch.utils.data import Dataset, TensorDataset
 
 from .camera_info import CameraInfo
 from .octree import OcTree
+
+
+DATASET_URLS = {
+    "antinous_400": "https://1drv.ms/u/s!AnWvK2b51nGqluBagOAnmTej7LJb_Q",
+    "lego_400": "https://1drv.ms/u/s!AnWvK2b51nGqluBbbdxzOG5q4a98yA"
+}
+
+
+def _create_onedrive_directdownload(onedrive_link: str):
+    data_bytes64 = base64.b64encode(bytes(onedrive_link, "utf-8"))
+    data_bytes64 = data_bytes64.decode("utf-8")
+    data_bytes64 = data_bytes64.replace("/", "_").replace("+", "-").rstrip("=")
+    return f"https://api.onedrive.com/v1.0/shares/u!{data_bytes64}/root/content"
 
 
 class PixelData(namedtuple("PixelData", ["uv", "color"])):
@@ -66,6 +81,10 @@ class PixelDataset:
             PixelDataset: the constructed dataset
         """
         pixels = cv2.imread(path)
+        if pixels is None:
+            print("Unable to load image at", path)
+            return None
+
         if pixels.shape[0] > pixels.shape[1]:
             start = (pixels.shape[0] - pixels.shape[1]) // 2
             end = start + pixels.shape[1]
@@ -459,60 +478,91 @@ class RaySamplingDataset(Dataset):
                           colors, alphas, t_values)
 
     @staticmethod
+    def download(name: str, output_path: str) -> bool:
+        if name not in DATASET_URLS:
+            print("Unrecognized dataset:", name)
+            return False
+
+        print("Downloading", name, "to", output_path)
+        url = _create_onedrive_directdownload(DATASET_URLS[name])
+        res = requests.get(url, stream=True)
+        bytes_downloaded = 0
+        total_bytes = int(res.headers.get("content-length"))
+        milestone = 0
+        with open(output_path, "wb") as file:
+            for chunk in res.iter_content(chunk_size=1024):
+                if chunk:
+                    bytes_downloaded += len(chunk)
+                    percent_complete = 100 * bytes_downloaded // total_bytes
+                    if percent_complete >= milestone:
+                        print("{}%".format(percent_complete))
+                        milestone += 10
+
+                    file.write(chunk)
+
+        print("Done")
+        return True
+
+    @staticmethod
     def load(path: str, split: str, resolution: int,
              num_samples: int, stratified: bool) -> "RaySamplingDataset":
+        data = np.load(path)
+        test_end, height, width = data["images"].shape[:3]
+        split_counts = data["split_counts"]
+        train_end = split_counts[0]
+        val_end = train_end + split_counts[1]
+
         if split == "train":
-            idx = list(range(100))
+            idx = list(range(train_end))
         elif split == "val":
-            idx = list(range(100, 107))
+            idx = list(range(train_end, val_end))
         elif split == "test":
-            idx = list(range(107, 120))
+            idx = list(range(val_end, test_end))
         else:
             print("Unrecognized split:", split)
 
-        data = np.load(path)
-        images = data["images"]
-        poses = data["poses"]
-        focal_length = data["focal"]
-        num_images, height, width = images.shape[:3]
-        assert num_images == 120
+        images = data["images"][idx]
+        intrinsics = data["intrinsics"][idx]
+        extrinsics = data["extrinsics"][idx]
 
-        cameras = []
-        for i, pose in enumerate(poses[idx]):
-            name = "{}{:02}".format(split, i)
-            intrinsics = np.array([
-                [focal_length, 0, width // 2],
-                [0, focal_length, height // 2],
-                [0, 0, 1]
-            ])
-            camera_to_world = np.array(pose, np.float32)
-            camera_to_world = camera_to_world @ sp.Transforms.rotation_about_x(np.pi)
-            cameras.append(CameraInfo.create(name, (width, height),
-                                             intrinsics, camera_to_world))
-
-        images = images[idx]
+        cameras = [CameraInfo.create("{}{:03}".format(split, i),
+                                     (width, height),
+                                     intr, extr)
+                   for i, (intr, extr) in enumerate(zip(intrinsics,
+                                                        extrinsics))]
         return RaySamplingDataset(images, cameras, num_samples, resolution,
                                   stratified=stratified)
 
-    def to_scenepic(self) -> sp.Scene:
+    def to_scenepic(self, num_cameras=0) -> sp.Scene:
         scene = sp.Scene()
         frustums = scene.create_mesh("frustums", layer_id="frustums")
         canvas = scene.create_canvas_3d(width=800,
                                         height=800)
         canvas.shading = sp.Shading(sp.Colors.Gray)
 
+        if num_cameras:
+            idx = np.random.choice(len(self.cameras), num_cameras,
+                                   replace=False)
+            idx = idx.tolist()
+            images = self.images[idx]
+            cameras = [self.cameras[i] for i in idx]
+        else:
+            idx = np.arange(len(self.cameras))
+            images = self.images
+            cameras = self.cameras
+
         cmap = get_cmap("jet")
-        camera_colors = cmap(np.linspace(0, 1, len(self.cameras)))[:, :3]
+        camera_colors = cmap(np.linspace(0, 1, len(cameras)))[:, :3]
         image_meshes = []
         sys.stdout.write("Adding cameras")
-        for pixels, camera, color in zip(self.images, self.cameras, camera_colors):
+        for pixels, camera, color in zip(images, cameras, camera_colors):
             sys.stdout.write(".")
             sys.stdout.flush()
             camera = camera.to_scenepic()
 
             image = scene.create_image()
             pixels = cv2.resize(pixels, (200, 200), cv2.INTER_AREA)
-            image.from_numpy(pixels)
+            image.from_numpy(pixels[..., :3])
             mesh = scene.create_mesh(layer_id="images", texture_id=image.image_id,
                                      double_sided=True)
             mesh.add_camera_image(camera, depth=0.5)
@@ -524,9 +574,10 @@ class RaySamplingDataset(Dataset):
 
         sys.stdout.write("Sampling rays...")
         num_rays = self.resolution * self.resolution
-        for i, camera in enumerate(self.cameras):
+        for i in idx:
             sys.stdout.write(".")
             sys.stdout.flush()
+            camera = self.cameras[i]
             start = i * num_rays
             end = start + num_rays
             index = [i for i in range(start, end)]

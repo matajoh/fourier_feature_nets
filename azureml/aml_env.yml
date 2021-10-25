@@ -1,0 +1,23 @@
+channels:
+    - pytorch
+    - nvidia
+dependencies:
+    - python=3.7
+    - cudatoolkit=11.1
+    - pytorch=1.9.0
+    - torchvision=0.10
+    - torchaudio=0.9
+    - pip=20.2
+    - cudnn
+    - pip:
+        - azureml-defaults
+        - azureml-train-core
+        - ffmpeg-python
+        - matplotlib
+        - numba==0.54.1
+        - numpy==1.20.3
+        - opencv-python-headless>=4.5.3
+        - requests
+        - scenepic
+        - scipy
+        - trimesh

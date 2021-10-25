@@ -62,10 +62,20 @@ def _main():
                                         num_channels=args.num_channels,
                                         num_frequencies=args.num_frequencies)
 
-    train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
+    data_path = args.data_path
+    if not os.path.exists(data_path):
+        data_path = os.path.join(os.path.dirname(__file__), "data", data_path)
+        if not os.path.exists(data_path):
+            dataset_name = os.path.basename(data_path)[:-4]
+            success = nerf.RaySamplingDataset.download(dataset_name, data_path)
+            if not success:
+                print("Unable to download dataset", dataset_name)
+                return 1
+
+    train_dataset = nerf.RaySamplingDataset.load(data_path, "train",
                                                  args.resolution,
                                                  args.num_samples, True)
-    val_dataset = nerf.RaySamplingDataset.load(args.data_path, "val",
+    val_dataset = nerf.RaySamplingDataset.load(data_path, "val",
                                                args.resolution,
                                                args.num_samples, False)
 

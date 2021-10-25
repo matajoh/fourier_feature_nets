@@ -6,3 +6,4 @@ torch
 matplotlib
 trimesh
 nbstripout
+requests
