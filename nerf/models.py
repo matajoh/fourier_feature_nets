@@ -1,6 +1,7 @@
 """Module containing various NeRF formulations."""
 
 import math
+from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -11,7 +12,8 @@ class FourierFeatureMLP(nn.Module):
 
     def __init__(self, num_inputs: int, num_outputs: int,
                  frequencies_matrix: torch.Tensor, num_layers: int,
-                 num_channels: int, output_act=None):
+                 num_channels: int, output_act=None,
+                 skips: Tuple[int]=()):
         """Constructor.
 
         Args:
@@ -23,6 +25,9 @@ class FourierFeatureMLP(nn.Module):
                                           Defaults to 256.
             output_act (Callable, optional): Optional output activation.
                                              Defaults to None.
+            skips (Tuple[int], optional): Skip layers, where the inputs are
+                                         concatenated to the activations.
+                                         Defaults to None.
         """
         nn.Module.__init__(self)
         self.num_inputs = num_inputs
@@ -36,11 +41,16 @@ class FourierFeatureMLP(nn.Module):
                                             requires_grad=False)
             num_inputs = frequencies_matrix.shape[1] * 2
 
+        self.skips = set(skips)
         layers = []
-        for _ in range(num_layers - 1):
-            layers.append(nn.Linear(num_inputs, num_channels))
+        layer_inputs = num_inputs
+        for i in range(num_layers - 1):
+            if i in self.skips:
+                layer_inputs += num_inputs
+
+            layers.append(nn.Linear(layer_inputs, num_channels))
             layers.append(nn.ReLU())
-            num_inputs = num_channels
+            layer_inputs = num_channels
 
         layers.append(nn.Linear(num_inputs, num_outputs))
 
@@ -185,3 +195,44 @@ class GaussianFourierMLP(FourierFeatureMLP):
         frequencies *= 2 * math.pi
         FourierFeatureMLP.__init__(self, num_inputs, num_outputs, frequencies,
                                    num_layers, num_channels, output_act)
+
+
+class NeRF(nn.Module):
+    def __init__(self, num_layers=8, num_channels=256,
+                 sigma_pos=8, num_freq_pos=8,
+                 sigma_view=4, num_freq_view=4):
+
+
+    input_ch = int(input_ch)
+    input_ch_views = int(input_ch_views)
+
+    inputs = tf.keras.Input(shape=(input_ch + input_ch_views))
+    inputs_pts, inputs_views = tf.split(inputs, [input_ch, input_ch_views], -1)
+    inputs_pts.set_shape([None, input_ch])
+    inputs_views.set_shape([None, input_ch_views])
+
+    print(inputs.shape, inputs_pts.shape, inputs_views.shape)
+    outputs = inputs_pts
+    for i in range(D):
+        outputs = dense(W)(outputs)
+        if i in skips:
+            outputs = tf.concat([inputs_pts, outputs], -1)
+
+    if use_viewdirs:
+        alpha_out = dense(1, act=None)(outputs)
+        bottleneck = dense(256, act=None)(outputs)
+        inputs_viewdirs = tf.concat(
+            [bottleneck, inputs_views], -1)  # concat viewdirs
+        outputs = inputs_viewdirs
+        # The supplement to the paper states there are 4 hidden layers here, but this is an error since
+        # the experiments were actually run with 1 hidden layer, so we will leave it as 1.
+        for i in range(1):
+            outputs = dense(W//2)(outputs)
+        outputs = dense(3, act=None)(outputs)
+        outputs = tf.concat([outputs, alpha_out], -1)
+    else:
+        outputs = dense(output_ch, act=None)(outputs)
+
+D=args.netdepth, W=args.netwidth,
+        input_ch=input_ch, output_ch=output_ch, skips=skips,
+        input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
