@@ -30,7 +30,7 @@ def _parse_args():
                         help="Number of frequencies used for encoding")
     parser.add_argument("--pos-sigma", type=float, default=1.27,
                         help="Value of sigma for the positional model")
-    parser.add_argument("--gauss-sigma", type=float, default=6.05,
+    parser.add_argument("--gauss-sigma", type=float, default=4.14,
                         help="Value of sigma for the gaussian model")
     parser.add_argument("--num-steps", type=int, default=50000,
                         help="Number of steps to use for training.")
