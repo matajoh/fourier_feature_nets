@@ -423,6 +423,13 @@ class RaySamplingDataset(Dataset):
 
         return self.num_rays
 
+    def subset(self, num_cameras: int, stratified: bool):
+        return RaySamplingDataset(self.images[:num_cameras],
+                                  self.cameras[:num_cameras],
+                                  self.num_samples,
+                                  self.resolution,
+                                  stratified=stratified)
+
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
@@ -465,7 +472,7 @@ class RaySamplingDataset(Dataset):
 
         max_dist = torch.full((num_rays, 1), 1e10, dtype=torch.float32)
         deltas = t_values[:, 1:] - t_values[:, :-1]
-        deltas = torch.cat([deltas, max_dist], axis=-1)
+        deltas = torch.cat([deltas, max_dist], dim=-1)
         deltas = deltas.unsqueeze(-1)
 
         colors = self.colors[idx]

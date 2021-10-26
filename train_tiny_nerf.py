@@ -30,7 +30,7 @@ def _parse_args():
                         help="Number of frequencies used for encoding")
     parser.add_argument("--pos-sigma", type=float, default=1.27,
                         help="Value of sigma for the positional model")
-    parser.add_argument("--gauss-sigma", type=float, default=6.05,
+    parser.add_argument("--gauss-sigma", type=float, default=4.14,
                         help="Value of sigma for the gaussian model")
     parser.add_argument("--num-steps", type=int, default=50000,
                         help="Number of steps to use for training.")
@@ -90,8 +90,10 @@ def _main():
     with open(os.path.join(args.results_dir, "log.txt"), "w") as file:
         json.dump(vars(args), file)
         file.write("\n\n")
-        for step, timestamp, psnr in log:
-            file.write("{}\t{}\t{}\n".format(step, timestamp, psnr))
+        file.write("\t".join(["step", "timestamp", "psnr_train", "psnr_val"]))
+        file.write("\t")
+        for line in log:
+            file.write("\t".join([str(val) for val in line]) + "\n")
 
     sp_path = os.path.join(args.results_dir, "tiny_nerf.html")
     raycaster.to_scenepic().save_as_html(sp_path)

@@ -27,6 +27,7 @@ class Raycaster(nn.Module):
         self.model = model
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
+        self.trainval_dataset = train_dataset.subset(len(val_dataset), True)
         self._results_dir = results_dir
         self._val_index = 0
         self._use_alpha = train_dataset.alphas is not None
@@ -48,13 +49,12 @@ class Raycaster(nn.Module):
         color = torch.sigmoid(color)
         opacity = F.softplus(opacity)
 
-        left_trans = torch.ones((num_rays, 1, 1), dtype=torch.float32)
-        left_trans = left_trans.to(positions.device)
         alpha = 1 - torch.exp(-(opacity * ray_samples.deltas))
         ones = torch.ones_like(alpha)
+
         trans = torch.minimum(ones, 1 - alpha + 1e-10)
-        _, trans = trans.split([1, num_samples - 1], dim=-2)
-        trans = torch.cat([left_trans, trans], -2)
+        trans, _ = trans.split([num_samples - 1, 1], dim=-2)
+        trans = torch.cat([torch.ones_like(trans[:, :1, :]), trans], dim=-2)
         weights = alpha * torch.cumprod(trans, -2)
         output_color = weights * color
         output_color = output_color.sum(-2)
@@ -76,12 +76,17 @@ class Raycaster(nn.Module):
 
         return loss
 
-    def _val_image(self, step: int, batch_size: int):
+    def _render_image(self, step: int, batch_size: int, split: str):
         with torch.no_grad():
             device = next(self.model.parameters()).device
-            resolution = self.val_dataset.resolution
+            dataset = self.val_dataset if split == "val" else self.trainval_dataset
+            resolution = dataset.resolution
             num_rays = resolution * resolution
-            image_start = self._val_index * num_rays
+            if self._val_index * num_rays >= len(dataset):
+                self._val_index = 0
+
+            index = self._val_index
+            image_start = index * num_rays
             image_end = image_start + num_rays
             predicted = []
             actual = []
@@ -92,7 +97,7 @@ class Raycaster(nn.Module):
             for start in range(image_start, image_end, batch_size):
                 end = min(start + batch_size, image_end)
                 idx = list(range(start, end))
-                ray_samples = self.val_dataset[idx]
+                ray_samples = dataset[idx]
                 ray_samples = ray_samples.to(device)
                 pred_colors, pred_alphas, pred_depth = self.render(ray_samples)
                 pred_colors = pred_colors.cpu().numpy()
@@ -131,8 +136,12 @@ class Raycaster(nn.Module):
             error = (error / error.max()).reshape(resolution, resolution, 1)
             error = (error * 255).astype(np.uint8)
 
-            name = "val_s{:07}_c{:03}.png".format(step, self._val_index)
-            image_path = os.path.join(self._results_dir, name)
+            name = "s{:07}_c{:03}.png".format(step, index)
+            image_dir = os.path.join(self._results_dir, split)
+            if not os.path.exists(image_dir):
+                os.makedirs(image_dir)
+
+            image_path = os.path.join(image_dir, name)
 
             compare = np.zeros((resolution*2, resolution*2, 3), np.uint8)
             compare[:resolution, :resolution] = predicted
@@ -140,11 +149,7 @@ class Raycaster(nn.Module):
             compare[:resolution, resolution:] = depth
             compare[resolution:, resolution:] = error
             cv2.imwrite(image_path, compare[:, :, ::-1])
-            self._val_index += 1
-            if self._val_index * num_rays == len(self.val_dataset):
-                self._val_index = 0
-
-            return psnr, image_path
+            return psnr
 
     def fit(self, batch_size: int, learning_rate: float, num_steps: int,
             reporting_interval: int, crop_epochs: int):
@@ -176,22 +181,25 @@ class Raycaster(nn.Module):
                 optim.step()
 
                 if step % reporting_interval == 0:
-                    psnr, image_path = self._val_image(step, batch_size)
+                    val_psnr = self._render_image(step, batch_size, "val")
+                    train_psnr = self._render_image(step, batch_size, "train")
                     current_time = time.time()
                     time_per_step = (current_time - timestamp) / reporting_interval
                     timestamp = current_time
                     print("{:07}".format(step),
                           "{:2f} s/step".format(time_per_step),
-                          "loss: {:2f}".format(loss.item()),
-                          "psnr: {:2f}".format(psnr))
+                          "psnr_train: {:2f}".format(train_psnr),
+                          "loss_train: {:2f}".format(loss.item()),
+                          "val_psnr: {:2f}".format(val_psnr))
 
                     if self.run:
-                        self.run.log_image("val{:05}".format(step), image_path)
-                        self.run.log("psnr", psnr)
-                        self.run.log("loss", loss.item())
+                        self.run.log("psnr_train", train_psnr)
+                        self.run.log("loss_train", loss.item())
+                        self.run.log("psnr_val", val_psnr)
                         self.run.log("time_per_step", time_per_step)
 
-                    log.append((step, timestamp - start_time, psnr))
+                    log.append((step, timestamp - start_time, train_psnr, val_psnr))
+                    self._val_index += 1
 
                 step += 1
 
