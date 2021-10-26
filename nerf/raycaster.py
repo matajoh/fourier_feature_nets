@@ -100,7 +100,7 @@ class Raycaster(nn.Module):
                 ray_samples = dataset[idx]
                 ray_samples = ray_samples.to(device)
                 pred_colors, pred_alphas, pred_depth = self.render(ray_samples)
-                pred_colors = pred_colors.cpu().numpy()
+                pred_colors = pred_colors.clamp(0, 1).cpu().numpy()
                 act_colors = ray_samples.colors.cpu().numpy()
                 pred_error = np.square(act_colors - pred_colors).sum(-1) / 3
                 if self._use_alpha:
