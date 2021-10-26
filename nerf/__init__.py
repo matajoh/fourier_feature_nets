@@ -2,7 +2,6 @@
 
 from .camera_info import CameraInfo
 from .datasets import PixelDataset, RaySamples, RaySamplingDataset, VoxelDataset
-from .fast_octree import FastOcTree
 from .models import (
     BasicFourierMLP,
     GaussianFourierMLP,
