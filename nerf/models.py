@@ -195,42 +195,49 @@ class GaussianFourierMLP(FourierFeatureMLP):
 class NeRF(nn.Module):
     def __init__(self, num_layers=8, num_channels=256,
                  sigma_pos=8, num_freq_pos=8,
-                 sigma_view=4, num_freq_view=4):
-    self.pos_encoding = PositionalFourierMLP.encoding(sigma_pos, num_freq_pos, 3)
-    self.view_encoding = PositionalFourierMLP.encoding(sigma_view, num_freq_view, 3)
-    
-    
+                 sigma_view=4, num_freq_view=4,
+                 skips=(4)):
+        self.pos_encoding = PositionalFourierMLP.encoding(sigma_pos, num_freq_pos, 3)
+        self.view_encoding = PositionalFourierMLP.encoding(sigma_view, num_freq_view, 3)
+        self.skips = set(skips)
+        
+        self.layers = nn.ModuleList()
+        num_inputs = self.pos_encoding.shape[-1]
+        
+        layer_inputs = num_inputs
+        for i in range(num_layers):
+            if i in self.skips:
+                layer_inputs += num_inputs
 
-    input_ch = int(input_ch)
-    input_ch_views = int(input_ch_views)
+            self.layers.append(nn.Linear(layer_inputs, num_channels))
+            layer_inputs = num_channels
 
-    inputs = tf.keras.Input(shape=(input_ch + input_ch_views))
-    inputs_pts, inputs_views = tf.split(inputs, [input_ch, input_ch_views], -1)
-    inputs_pts.set_shape([None, input_ch])
-    inputs_views.set_shape([None, input_ch_views])
+        self.opacity_out = nn.Linear(layer_inputs, 1)
+        self.bottleneck = nn.Linear(layer_inputs, num_channels)
 
-    print(inputs.shape, inputs_pts.shape, inputs_views.shape)
-    outputs = inputs_pts
-    for i in range(D):
-        outputs = dense(W)(outputs)
-        if i in skips:
-            outputs = tf.concat([inputs_pts, outputs], -1)
+        layer_inputs = num_channels + self.view_encoding.shape[-1]
+        self.hidden_view = nn.Linear(layer_inputs, num_channels // 2)
+        layer_inputs = num_channels // 2
+        self.color_out = nn.Linear(layer_inputs, 3)
 
-    if use_viewdirs:
-        alpha_out = dense(1, act=None)(outputs)
-        bottleneck = dense(256, act=None)(outputs)
-        inputs_viewdirs = tf.concat(
-            [bottleneck, inputs_views], -1)  # concat viewdirs
-        outputs = inputs_viewdirs
-        # The supplement to the paper states there are 4 hidden layers here, but this is an error since
-        # the experiments were actually run with 1 hidden layer, so we will leave it as 1.
-        for i in range(1):
-            outputs = dense(W//2)(outputs)
-        outputs = dense(3, act=None)(outputs)
-        outputs = tf.concat([outputs, alpha_out], -1)
-    else:
-        outputs = dense(output_ch, act=None)(outputs)
+    def forward(self, position, view):
+        pos = position @ self.pos_encoding
+        encoded_pos = torch.cat([pos.cos(), pos.sin()], dim=-1)
 
-D=args.netdepth, W=args.netwidth,
-        input_ch=input_ch, output_ch=output_ch, skips=skips,
-        input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs)
+        view = view @ self.view_encoding
+        encoded_view = torch.cat([view.cos(), view.sin()], dim=-1)
+
+        outputs = encoded_pos
+        for i, layer in enumerate(self.layers):
+            if i in self.skips:
+                outputs = torch.cat([outputs, encoded_pos], dim=-1)
+
+            outputs = torch.relu(layer(outputs))
+
+        opacity = self.opacity_out(outputs)
+        bottleneck = self.bottleneck(outputs)
+
+        outputs = torch.cat([bottleneck, encoded_view], dim=-1)
+        outputs = torch.relu(self.hidden_view(outputs))
+        color = self.color_out(outputs)
+        return torch.cat([color, opacity], dim=-1)
