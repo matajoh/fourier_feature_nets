@@ -1,7 +1,6 @@
 """Module containing various NeRF formulations."""
 
 import math
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -12,8 +11,7 @@ class FourierFeatureMLP(nn.Module):
 
     def __init__(self, num_inputs: int, num_outputs: int,
                  frequencies_matrix: torch.Tensor, num_layers: int,
-                 num_channels: int, output_act=None,
-                 skips: Tuple[int]=()):
+                 num_channels: int, output_act=None):
         """Constructor.
 
         Args:
@@ -25,9 +23,6 @@ class FourierFeatureMLP(nn.Module):
                                           Defaults to 256.
             output_act (Callable, optional): Optional output activation.
                                              Defaults to None.
-            skips (Tuple[int], optional): Skip layers, where the inputs are
-                                         concatenated to the activations.
-                                         Defaults to None.
         """
         nn.Module.__init__(self)
         self.num_inputs = num_inputs
@@ -41,16 +36,11 @@ class FourierFeatureMLP(nn.Module):
                                             requires_grad=False)
             num_inputs = frequencies_matrix.shape[1] * 2
 
-        self.skips = set(skips)
         layers = []
-        layer_inputs = num_inputs
-        for i in range(num_layers - 1):
-            if i in self.skips:
-                layer_inputs += num_inputs
-
-            layers.append(nn.Linear(layer_inputs, num_channels))
+        for _ in range(num_layers - 1):
+            layers.append(nn.Linear(num_inputs, num_channels))
             layers.append(nn.ReLU())
-            layer_inputs = num_channels
+            num_inputs = num_channels
 
         layers.append(nn.Linear(num_inputs, num_outputs))
 
@@ -158,15 +148,20 @@ class PositionalFourierMLP(FourierFeatureMLP):
             output_act (Callable, optional): Optional output activation.
                                              Defaults to None.
         """
+        frequencies_matrix = self.encoding(sigma, num_frequencies, num_inputs)
+        FourierFeatureMLP.__init__(self, num_inputs, num_outputs,
+                                   frequencies_matrix, num_layers,
+                                   num_channels, output_act)
+
+    @staticmethod
+    def encoding(sigma: float, num_frequencies: int, num_inputs: int):
         num_steps = num_frequencies // num_inputs
         frequencies_matrix = 2 ** torch.linspace(0, sigma * 2 * math.pi, num_steps) - 1
         frequencies_matrix = frequencies_matrix.reshape(-1, 1, 1)
         frequencies_matrix = torch.eye(num_inputs) * frequencies_matrix
         frequencies_matrix = frequencies_matrix.reshape(-1, num_inputs)
         frequencies_matrix = frequencies_matrix.transpose(0, 1)
-        FourierFeatureMLP.__init__(self, num_inputs, num_outputs,
-                                   frequencies_matrix, num_layers,
-                                   num_channels, output_act)
+        return frequencies_matrix
 
 
 class GaussianFourierMLP(FourierFeatureMLP):
@@ -201,7 +196,10 @@ class NeRF(nn.Module):
     def __init__(self, num_layers=8, num_channels=256,
                  sigma_pos=8, num_freq_pos=8,
                  sigma_view=4, num_freq_view=4):
-
+    self.pos_encoding = PositionalFourierMLP.encoding(sigma_pos, num_freq_pos, 3)
+    self.view_encoding = PositionalFourierMLP.encoding(sigma_view, num_freq_view, 3)
+    
+    
 
     input_ch = int(input_ch)
     input_ch_views = int(input_ch_views)
