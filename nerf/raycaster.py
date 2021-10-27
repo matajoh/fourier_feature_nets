@@ -83,7 +83,7 @@ class Raycaster(nn.Module):
 
         return loss
 
-    def _render_image(self, step: int, batch_size: int, split: str):
+    def _render_eval_image(self, step: int, batch_size: int, split: str):
         with torch.no_grad():
             device = next(self.model.parameters()).device
             dataset = self.val_dataset if split == "val" else self.trainval_dataset
@@ -107,7 +107,7 @@ class Raycaster(nn.Module):
                 ray_samples = dataset[idx]
                 ray_samples = ray_samples.to(device)
                 pred_colors, pred_alphas, pred_depth = self.render(ray_samples)
-                pred_colors = pred_colors.clamp(0, 1).cpu().numpy()
+                pred_colors = pred_colors.cpu().numpy()
                 act_colors = ray_samples.colors.cpu().numpy()
                 pred_error = np.square(act_colors - pred_colors).sum(-1) / 3
                 if self._use_alpha:
@@ -127,6 +127,7 @@ class Raycaster(nn.Module):
             psnr = -10. * np.log10(loss)
 
             predicted = np.concatenate(predicted)
+            predicted = np.clip(predicted, 0, 1)
             predicted = predicted.reshape(resolution, resolution, 3)
             predicted = (predicted * 255).astype(np.uint8)
 
@@ -135,6 +136,7 @@ class Raycaster(nn.Module):
             actual = (actual * 255).astype(np.uint8)
 
             depth = np.concatenate(depth)
+            depth = np.clip(depth, 0, max_depth)
             depth = (depth / max_depth).reshape(resolution, resolution, 1)
             depth = (depth * 255).astype(np.uint8)
 
@@ -188,8 +190,8 @@ class Raycaster(nn.Module):
                 optim.step()
 
                 if step % reporting_interval == 0:
-                    val_psnr = self._render_image(step, batch_size, "val")
-                    train_psnr = self._render_image(step, batch_size, "train")
+                    val_psnr = self._render_eval_image(step, batch_size, "val")
+                    train_psnr = self._render_eval_image(step, batch_size, "train")
                     current_time = time.time()
                     time_per_step = (current_time - timestamp) / reporting_interval
                     timestamp = current_time
