@@ -1,18 +1,27 @@
 """Attempt at coding an octree using Numba."""
 
-from collections import deque, namedtuple
+from collections import deque
+from heapq import heappush, heappop
 from itertools import product
-from typing import Dict, List, Sequence, Set, Tuple
+from typing import Dict, List, Sequence, Set, Tuple, NamedTuple
 
 from numba import njit
 import numpy as np
+import torch
+import torch.nn as nn
 
 
-Vector = namedtuple("Vector", ["x", "y", "z"])
-Node = namedtuple("Node", ["id", "x", "y", "z", "scale"])
-Ray = namedtuple("Ray", ["x", "y", "z", "dx", "dy", "dz"])
-Intersection = namedtuple("Intersection", ["t_min", "a_min", "t_max", "a_max"])
-Path = namedtuple("Path", ["t_stops", "leaves"])
+Vector = NamedTuple("Vector", [("x", float), ("y", float), ("z", float)])
+Node = NamedTuple("Node", [("id", int),
+                           ("x", float), ("y", float), ("z", float),
+                           ("scale", float), ("depth", int)])
+Ray = NamedTuple("Ray", [("x", float), ("y", float), ("z", float),
+                         ("dx", float), ("dy", float), ("dz", float)])
+Intersection = NamedTuple("Intersection", [("t_min", float), ("a_min", int),
+                                           ("t_max", float), ("a_max", int)])
+Path = NamedTuple("Path", [("t_stops", np.ndarray), ("leaves", np.ndarray)])
+NodePriority = NamedTuple("NodePriority", [("depth", int), ("std", float),
+                                           ("opacity", float), ("node", Node)])
 
 
 @njit
@@ -99,21 +108,21 @@ def _find_child_of_node(node: Node, point: Vector) -> Node:
             y = node.y - scale
             if point.z < node.z:
                 z = node.z - scale
-                return Node(child_id, x, y, z, scale)
+                return Node(child_id, x, y, z, scale, node.depth + 1)
             else:
                 z = node.z + scale
                 child_id += Z_POS
-                return Node(child_id, x, y, z, scale)
+                return Node(child_id, x, y, z, scale, node.depth + 1)
         else:
             y = node.y + scale
             child_id += Y_POS
             if point.z < node.z:
                 z = node.z - scale
-                return Node(child_id, x, y, z, scale)
+                return Node(child_id, x, y, z, scale, node.depth + 1)
             else:
                 z = node.z + scale
                 child_id += Z_POS
-                return Node(child_id, x, y, z, scale)
+                return Node(child_id, x, y, z, scale, node.depth + 1)
     else:
         x = node.x + scale
         child_id += X_POS
@@ -121,21 +130,21 @@ def _find_child_of_node(node: Node, point: Vector) -> Node:
             y = node.y - scale
             if point.z < node.z:
                 z = node.z - scale
-                return Node(child_id, x, y, z, scale)
+                return Node(child_id, x, y, z, scale, node.depth + 1)
             else:
                 z = node.z + scale
                 child_id += Z_POS
-                return Node(child_id, x, y, z, scale)
+                return Node(child_id, x, y, z, scale, node.depth + 1)
         else:
             y = node.y + scale
             child_id += Y_POS
             if point.z < node.z:
                 z = node.z - scale
-                return Node(child_id, x, y, z, scale)
+                return Node(child_id, x, y, z, scale, node.depth + 1)
             else:
                 z = node.z + scale
                 child_id += Z_POS
-                return Node(child_id, x, y, z, scale)
+                return Node(child_id, x, y, z, scale, node.depth + 1)
 
 
 @njit
@@ -191,14 +200,14 @@ def _find_sibling_of_node(node: Node, point: Vector, axis: int) -> Node:
             sibling_id |= Z_POS
             z = node.z + parent_scale
 
-    return Node(start + sibling_id, x, y, z, node.scale)
+    return Node(start + sibling_id, x, y, z, node.scale, node.depth)
 
 
 @njit
 def _trace_ray_path(scale: float, leaf_index: np.ndarray,
                     start: np.ndarray, direction: np.ndarray,
                     max_length) -> Path:
-    stack = [Node(0, 0.0, 0.0, 0.0, scale)]
+    stack = [Node(0, 0.0, 0.0, 0.0, scale, 0)]
     ray = Ray(start[0], start[1], start[2],
               direction[0], direction[1], direction[2])
     tr = _intersect_node_with_ray(stack[0], ray)
@@ -267,11 +276,11 @@ def _enumerate_children(node: Node) -> Sequence[Node]:
     y1 = node.y + scale
     z1 = node.z + scale
     for i, (x, y, z) in enumerate(product([x0, x1], [y0, y1], [z0, z1])):
-        yield Node(child_id + i, x, y, z, scale)
+        yield Node(child_id + i, x, y, z, scale, node.depth + 1)
 
 
 def _leaf_nodes(scale: float, leaf_ids: Set[int]) -> List[Node]:
-    queue = deque([Node(0, 0.0, 0.0, 0.0, scale)])
+    queue = deque([Node(0, 0.0, 0.0, 0.0, scale, 0)])
     leaves = []
     while queue:
         current = queue.popleft()
@@ -282,6 +291,18 @@ def _leaf_nodes(scale: float, leaf_ids: Set[int]) -> List[Node]:
                 queue.append(child)
 
     return leaves
+
+
+def _compute_priority(node: Node, model: nn.Module) -> NodePriority:
+    centers = [[node.x, node.y, node.z]]
+    for child in _enumerate_children(node):
+        centers.append([child.x, child.y, child.z])
+
+    centers = torch.FloatTensor(centers)
+    output = model(centers).cpu().numpy()
+    opacity = output[:, -3].max()
+    std = output.std()
+    return NodePriority(node.depth, -std, -opacity, node)
 
 
 class OcTree:
@@ -374,7 +395,26 @@ class OcTree:
 
         leaf_index = list(sorted(self._leaf_ids))
         leaf_index = np.array(leaf_index)
-        return _batch_intersect(self._scale, leaf_index, starts, directions, max_length)
+        return _batch_intersect(self._scale, leaf_index, starts, directions, max_length)      
+
+    @staticmethod
+    def build_from_model(model: nn.Module, num_voxels: int, scale: float, threshold: float) -> "OcTree":
+        node = Node(0, 0, 0, 0, scale, 0)
+        heap: List[NodePriority] = []
+        with torch.no_grad():
+            heappush(heap, _compute_priority(node, model))
+            while len(heap) < num_voxels:
+                top = heappop(heap)
+
+                for child in _enumerate_children(top.node):
+                    priority = _compute_priority(child, model)
+                    if priority.depth < 4 or priority.opacity > threshold:
+                        heappush(heap, child)
+
+        result = OcTree(1)
+        result._leaf_ids = set(priority.node.id for priority in heap)
+        result._scale
+        return result
 
     @property
     def state_dict(self):

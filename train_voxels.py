@@ -21,7 +21,7 @@ def _parse_args():
                         help="Number of cameras")
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--learning-rate", type=float, default=0.01)
-    parser.add_argument("--num-steps", type=int, default=50000,
+    parser.add_argument("--num-steps", type=int, default=40000,
                         help="Number of steps to use for training.")
     parser.add_argument("--report-interval", type=int, default=1000,
                         help="Reporting interval for validation/logging")

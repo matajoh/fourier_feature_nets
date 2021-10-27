@@ -27,6 +27,14 @@ class FourierFeatureMLP(nn.Module):
                                              Defaults to None.
         """
         nn.Module.__init__(self)
+        self.params = {
+            "num_inputs": num_inputs,
+            "num_outputs": num_outputs,
+            "frequencies": frequencies_matrix.tolist(),
+            "num_layers": num_layers,
+            "num_channels": num_channels,
+            "output_act": output_act
+        }
         self.num_inputs = num_inputs
         self.output_act = output_act
         if frequencies_matrix is None:
@@ -200,6 +208,17 @@ class NeRF(nn.Module):
                  sigma_view: float, num_freq_view: int,
                  skips: Sequence[int], include_inputs: bool):
         nn.Module.__init__(self)
+        self.params = {
+            "num_layers": num_layers,
+            "num_channels": num_channels,
+            "sigma_pos": sigma_pos,
+            "num_freq_pos": num_freq_pos,
+            "sigma_view": sigma_view,
+            "num_freq_view": num_freq_view,
+            "skips": list(skips),
+            "include_inputs": include_inputs
+        }
+
         pos_encoding = self.encoding(sigma_pos, num_freq_pos, 3)
         self.pos_encoding = nn.Parameter(pos_encoding, requires_grad=False)
         view_encoding = self.encoding(sigma_view, num_freq_view, 3)
@@ -277,7 +296,9 @@ class NeRF(nn.Module):
         Args:
             path (str): Path to the model file on disk
         """
-        torch.save(self.state_dict(), path)
+        state_dict = self.state_dict()
+        state_dict["params"] = self.params
+        torch.save(state_dict, path)
 
     def load(self, path: str):
         """Loads the model from the provided path.
@@ -285,8 +306,12 @@ class NeRF(nn.Module):
         Args:
             path (str): Path to the model file on disk
         """
-        self.load_state_dict(torch.load(path))
-        self.eval()
+        state_dict = torch.load(path)
+        model = NeRF(**state_dict["params"])
+        del state_dict["params"]
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model
 
 
 class Voxels(nn.Module):
@@ -315,13 +340,24 @@ class Voxels(nn.Module):
         Args:
             path (str): Path to the model file on disk
         """
-        torch.save(self.state_dict(), path)
+        state_dict = self.state_dict()
+        state_dict["params"] = {
+            "side": int(self.voxels.shape[-1]),
+            "scale": self.scale
+        }
 
-    def load(self, path: str):
+        torch.save(state_dict, path)
+
+    @staticmethod
+    def load(path: str) -> "Voxels":
         """Loads the model from the provided path.
 
         Args:
             path (str): Path to the model file on disk
         """
-        self.load_state_dict(torch.load(path))
-        self.eval()
+        state_dict = torch.load(path)
+        model = Voxels(**state_dict["params"])
+        del state_dict["params"]
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model
