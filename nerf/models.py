@@ -13,7 +13,7 @@ class FourierFeatureMLP(nn.Module):
 
     def __init__(self, num_inputs: int, num_outputs: int,
                  frequencies_matrix: torch.Tensor, num_layers: int,
-                 num_channels: int, output_act=None):
+                 num_channels: int, output_sigmoid=False):
         """Constructor.
 
         Args:
@@ -23,20 +23,20 @@ class FourierFeatureMLP(nn.Module):
             num_layers (int): Number of layers in the MLP
             num_channels (int, optional): Number of channels in the MLP.
                                           Defaults to 256.
-            output_act (Callable, optional): Optional output activation.
-                                             Defaults to None.
+            output_sigmoid (bool, optional): Optional output sigmoid.
+                                             Defaults to False.
         """
         nn.Module.__init__(self)
         self.params = {
             "num_inputs": num_inputs,
             "num_outputs": num_outputs,
-            "frequencies": frequencies_matrix.tolist(),
+            "frequencies_matrix": frequencies_matrix.tolist() if frequencies_matrix else None,
             "num_layers": num_layers,
             "num_channels": num_channels,
-            "output_act": output_act
+            "output_sigmoid": output_sigmoid
         }
         self.num_inputs = num_inputs
-        self.output_act = output_act
+        self.output_act = torch.sigmoid if output_sigmoid else None
         if frequencies_matrix is None:
             self.frequencies = None
             num_inputs = num_inputs
@@ -82,16 +82,23 @@ class FourierFeatureMLP(nn.Module):
         Args:
             path (str): Path to the model file on disk
         """
-        torch.save(self.state_dict(), path)
+        state_dict = self.state_dict()
+        state_dict["params"] = self.params
+        torch.save(state_dict, path)
 
-    def load(self, path: str):
+    @staticmethod
+    def load(path: str) -> "FourierFeatureMLP":
         """Loads the model from the provided path.
 
         Args:
             path (str): Path to the model file on disk
         """
-        self.load_state_dict(torch.load(path))
-        self.eval()
+        state_dict = torch.load(path)
+        model = FourierFeatureMLP(**state_dict["params"])
+        del state_dict["params"]
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model
 
 
 class MLP(FourierFeatureMLP):
@@ -300,7 +307,8 @@ class NeRF(nn.Module):
         state_dict["params"] = self.params
         torch.save(state_dict, path)
 
-    def load(self, path: str):
+    @staticmethod
+    def load(path: str) -> "NeRF":
         """Loads the model from the provided path.
 
         Args:
@@ -317,6 +325,11 @@ class NeRF(nn.Module):
 class Voxels(nn.Module):
     def __init__(self, side: int, scale: float):
         nn.Module.__init__(self)
+        self.params = {
+            "side": side,
+            "scale": scale
+        }
+
         voxels = torch.zeros((1, 4, side, side, side), dtype=torch.float32)
         self.voxels = nn.Parameter(voxels)
         bias = torch.zeros(4, dtype=torch.float32)
@@ -328,7 +341,8 @@ class Voxels(nn.Module):
     def forward(self, positions: torch.Tensor) -> torch.Tensor:
         positions = positions.reshape(1, -1, 1, 1, 3)
         positions = positions / self.scale
-        output = F.grid_sample(self.voxels, positions, align_corners=False)
+        output = F.grid_sample(self.voxels, positions,
+                               padding_mode="border", align_corners=False)
         output = output.transpose(1, 2)
         output = output.reshape(-1, 4)
         output = output + self.bias
@@ -341,11 +355,7 @@ class Voxels(nn.Module):
             path (str): Path to the model file on disk
         """
         state_dict = self.state_dict()
-        state_dict["params"] = {
-            "side": int(self.voxels.shape[-1]),
-            "scale": self.scale
-        }
-
+        state_dict["params"] = self.params
         torch.save(state_dict, path)
 
     @staticmethod

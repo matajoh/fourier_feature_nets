@@ -279,14 +279,14 @@ def _enumerate_children(node: Node) -> Sequence[Node]:
         yield Node(child_id + i, x, y, z, scale, node.depth + 1)
 
 
-def _leaf_nodes(scale: float, leaf_ids: Set[int]) -> List[Node]:
+def _leaf_nodes(scale: float, node_ids: Set[int], leaf_ids: Set[int]) -> List[Node]:
     queue = deque([Node(0, 0.0, 0.0, 0.0, scale, 0)])
     leaves = []
     while queue:
         current = queue.popleft()
         if current.id in leaf_ids:
             leaves.append(current)
-        else:
+        elif current.id in node_ids:
             for child in _enumerate_children(current):
                 queue.append(child)
 
@@ -299,10 +299,10 @@ def _compute_priority(node: Node, model: nn.Module) -> NodePriority:
         centers.append([child.x, child.y, child.z])
 
     centers = torch.FloatTensor(centers)
-    output = model(centers).cpu().numpy()
-    opacity = output[:, -3].max()
-    std = output.std()
-    return NodePriority(node.depth, -std, -opacity, node)
+    output = model(centers)
+    opacity = torch.sigmoid(output[:, -3].max()).item()
+    std = output.std(0).mean().item()
+    return NodePriority(node.depth, -std, opacity, node)
 
 
 class OcTree:
@@ -318,6 +318,7 @@ class OcTree:
         """
         self._scale = float(scale)
 
+        self._node_ids = set()
         self._leaf_ids = set()
         queue = deque([(0, 0)])
         while queue:
@@ -326,6 +327,7 @@ class OcTree:
                 self._leaf_ids.add(current)
                 continue
 
+            self._node_ids.add(current)
             child_start = (current << 3) + 1
             child_end = child_start + 8
             for child_id in range(child_start, child_end):
@@ -333,15 +335,15 @@ class OcTree:
 
     def leaf_centers(self) -> np.ndarray:
         """The Nx3 center coordinates of all leaves."""
-        leaves = _leaf_nodes(self._scale, self._leaf_ids)
+        leaves = _leaf_nodes(self._scale, self._node_ids, self._leaf_ids)
         leaf_centers = [[leaf.x, leaf.y, leaf.z] for leaf in leaves]
         return np.array(leaf_centers, np.float32)
 
-    def leaf_scales(self) -> np.ndarray:
+    def leaf_depths(self) -> np.ndarray:
         """The N scale values for all leaves."""
-        leaves = _leaf_nodes(self._scale, self._leaf_ids)
-        leaf_scales = [leaf.scale for leaf in leaves]
-        return np.array(leaf_scales, np.float32)
+        leaves = _leaf_nodes(self._scale, self._node_ids, self._leaf_ids)
+        leaf_depths = [leaf.depth for leaf in leaves]
+        return np.array(leaf_depths, np.float32)
 
     def __len__(self):
         """Counts all the nodes in the tree."""
@@ -395,25 +397,34 @@ class OcTree:
 
         leaf_index = list(sorted(self._leaf_ids))
         leaf_index = np.array(leaf_index)
+        # TODO for sparse trees this won't work
         return _batch_intersect(self._scale, leaf_index, starts, directions, max_length)      
 
     @staticmethod
     def build_from_model(model: nn.Module, num_voxels: int, scale: float, threshold: float) -> "OcTree":
         node = Node(0, 0, 0, 0, scale, 0)
         heap: List[NodePriority] = []
+        milestone = 0
+        node_ids = set()
         with torch.no_grad():
             heappush(heap, _compute_priority(node, model))
             while len(heap) < num_voxels:
-                top = heappop(heap)
+                if len(heap) > milestone:
+                    print(len(heap), "voxels")
+                    milestone += num_voxels // 10
 
+                top = heappop(heap)
+                node_ids.add(top.node.id)
                 for child in _enumerate_children(top.node):
                     priority = _compute_priority(child, model)
                     if priority.depth < 4 or priority.opacity > threshold:
-                        heappush(heap, child)
+                        heappush(heap, priority)
 
+        print("done.")
         result = OcTree(1)
         result._leaf_ids = set(priority.node.id for priority in heap)
-        result._scale
+        result._node_ids = node_ids - result._leaf_ids
+        result._scale = scale
         return result
 
     @property

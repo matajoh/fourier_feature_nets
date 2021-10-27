@@ -92,7 +92,7 @@ def _main():
 
     sp_path = os.path.join(args.results_dir, "nerf.html")
     raycaster.to_scenepic().save_as_html(sp_path)
-    model.save(os.path.join(args.results_dir, "nerf.model"))
+    model.save(os.path.join(args.results_dir, "nerf.pt"))
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ class Raycaster(nn.Module):
         if not os.path.exists(results_dir):
             os.makedirs(results_dir)
 
-    def render(self, ray_samples: RaySamples) -> torch.Tensor:
+    def render(self, ray_samples: RaySamples, include_depth=False) -> torch.Tensor:
         num_rays, num_samples = ray_samples.deltas.shape[:2]
         positions = ray_samples.positions.reshape(-1, 3)
         if self._use_view:
@@ -67,11 +67,16 @@ class Raycaster(nn.Module):
         output_color = weights * color
         output_color = output_color.sum(-2)
 
-        with torch.no_grad():
-            output_depth = weights.squeeze(-1) * ray_samples.t_values
-            output_depth = output_depth.sum(-1)
+        weights = weights.squeeze(-1)
+        if include_depth:
+            with torch.no_grad():
+                weights[:, -1] = trans[:, -1, 0]
+                output_depth = weights * ray_samples.t_values
+                output_depth = output_depth.sum(-1)
+        else:
+            output_depth = None
 
-        weights = weights[:, :-1, 0]
+        weights = weights[:, :-1]
         output_alpha = weights.sum(-1)
         return output_color, output_alpha, output_depth
 
@@ -108,7 +113,7 @@ class Raycaster(nn.Module):
                 idx = list(range(start, end))
                 ray_samples = dataset[idx]
                 ray_samples = ray_samples.to(device)
-                pred_colors, pred_alphas, pred_depth = self.render(ray_samples)
+                pred_colors, pred_alphas, pred_depth = self.render(ray_samples, True)
                 pred_colors = pred_colors.cpu().numpy()
                 act_colors = ray_samples.colors.cpu().numpy()
                 pred_error = np.square(act_colors - pred_colors).sum(-1) / 3
@@ -192,8 +197,8 @@ class Raycaster(nn.Module):
                 optim.step()
 
                 if step % reporting_interval == 0:
-                    val_psnr = self._render_eval_image(step, batch_size, "val")
-                    train_psnr = self._render_eval_image(step, batch_size, "train")
+                    val_psnr = self._render_eval_image(step, 4 * batch_size, "val")
+                    train_psnr = self._render_eval_image(step, 4 * batch_size, "train")
                     current_time = time.time()
                     time_per_step = (current_time - timestamp) / reporting_interval
                     timestamp = current_time
