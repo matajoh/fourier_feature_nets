@@ -1,9 +1,11 @@
 """Module containing various NeRF formulations."""
 
 import math
+from typing import Sequence
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class FourierFeatureMLP(nn.Module):
@@ -193,17 +195,23 @@ class GaussianFourierMLP(FourierFeatureMLP):
 
 
 class NeRF(nn.Module):
-    def __init__(self, num_layers=8, num_channels=256,
-                 sigma_pos=8, num_freq_pos=8,
-                 sigma_view=4, num_freq_view=4,
-                 skips=(4)):
-        self.pos_encoding = PositionalFourierMLP.encoding(sigma_pos, num_freq_pos, 3)
-        self.view_encoding = PositionalFourierMLP.encoding(sigma_view, num_freq_view, 3)
+    def __init__(self, num_layers: int, num_channels: int,
+                 sigma_pos: float, num_freq_pos: int,
+                 sigma_view: float, num_freq_view: int,
+                 skips: Sequence[int], include_inputs: bool):
+        nn.Module.__init__(self)
+        pos_encoding = self.encoding(sigma_pos, num_freq_pos, 3)
+        self.pos_encoding = nn.Parameter(pos_encoding, requires_grad=False)
+        view_encoding = self.encoding(sigma_view, num_freq_view, 3)
+        self.view_encoding = nn.Parameter(view_encoding, requires_grad=False)
         self.skips = set(skips)
-        
+        self.include_inputs = include_inputs
+
         self.layers = nn.ModuleList()
-        num_inputs = self.pos_encoding.shape[-1]
-        
+        num_inputs = 2 * self.pos_encoding.shape[-1]
+        if self.include_inputs:
+            num_inputs += 3
+
         layer_inputs = num_inputs
         for i in range(num_layers):
             if i in self.skips:
@@ -215,17 +223,38 @@ class NeRF(nn.Module):
         self.opacity_out = nn.Linear(layer_inputs, 1)
         self.bottleneck = nn.Linear(layer_inputs, num_channels)
 
-        layer_inputs = num_channels + self.view_encoding.shape[-1]
+        layer_inputs = num_channels + 2 * self.view_encoding.shape[-1]
+        if self.include_inputs:
+            layer_inputs += 3
+
         self.hidden_view = nn.Linear(layer_inputs, num_channels // 2)
         layer_inputs = num_channels // 2
         self.color_out = nn.Linear(layer_inputs, 3)
 
-    def forward(self, position, view):
-        pos = position @ self.pos_encoding
-        encoded_pos = torch.cat([pos.cos(), pos.sin()], dim=-1)
+    @staticmethod
+    def encoding(sigma: float, num_freq: int, num_inputs: int):
+        max_log_freq = sigma * 2 * math.pi
+        frequencies_matrix = 2. ** torch.linspace(0, max_log_freq, num_freq)
+        frequencies_matrix = frequencies_matrix.reshape(-1, 1, 1)
+        frequencies_matrix = torch.eye(num_inputs) * frequencies_matrix
+        frequencies_matrix = frequencies_matrix.reshape(-1, num_inputs)
+        frequencies_matrix = frequencies_matrix.transpose(0, 1)
+        return frequencies_matrix
 
-        view = view @ self.view_encoding
-        encoded_view = torch.cat([view.cos(), view.sin()], dim=-1)
+    def forward(self, position, view):
+        encoded_pos = position @ self.pos_encoding
+        encoded_pos = [encoded_pos.cos(), encoded_pos.sin()]
+        if self.include_inputs:
+            encoded_pos.append(position)
+
+        encoded_pos = torch.cat(encoded_pos, dim=-1)
+
+        encoded_view = view @ self.view_encoding
+        encoded_view = [encoded_view.cos(), encoded_view.sin()]
+        if self.include_inputs:
+            encoded_view.append(view)
+
+        encoded_view = torch.cat(encoded_view, dim=-1)
 
         outputs = encoded_pos
         for i, layer in enumerate(self.layers):
@@ -241,3 +270,41 @@ class NeRF(nn.Module):
         outputs = torch.relu(self.hidden_view(outputs))
         color = self.color_out(outputs)
         return torch.cat([color, opacity], dim=-1)
+
+    def save(self, path: str):
+        """Saves the model to the specified path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: str):
+        """Loads the model from the provided path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        self.load_state_dict(torch.load(path))
+        self.eval()
+
+
+class Voxels(nn.Module):
+    def __init__(self, side: int, scale: float):
+        nn.Module.__init__(self)
+        voxels = torch.zeros((1, 4, side, side, side), dtype=torch.float32)
+        self.voxels = nn.Parameter(voxels)
+        bias = torch.zeros(4, dtype=torch.float32)
+        bias[:3] = torch.logit(torch.FloatTensor([1e-5, 1e-5, 1e-5]))
+        bias[3] = -2
+        self.bias = nn.Parameter(bias.unsqueeze(0))
+        self.scale = scale
+
+    def forward(self, positions: torch.Tensor) -> torch.Tensor:
+        positions = positions.reshape(1, -1, 1, 1, 3)
+        positions = positions / self.scale
+        output = F.grid_sample(self.voxels, positions, align_corners=False)
+        output = output.transpose(1, 2)
+        output = output.reshape(-1, 4)
+        output = output + self.bias
+        return output

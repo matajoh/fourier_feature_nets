@@ -423,7 +423,11 @@ class RaySamplingDataset(Dataset):
 
         return self.num_rays
 
-    def subset(self, num_cameras: int, stratified: bool):
+    @property
+    def num_cameras(self) -> int:
+        return len(self.cameras)
+
+    def subset(self, num_cameras: int, stratified=False):
         return RaySamplingDataset(self.images[:num_cameras],
                                   self.cameras[:num_cameras],
                                   self.num_samples,
@@ -467,6 +471,7 @@ class RaySamplingDataset(Dataset):
 
         starts = starts.reshape(num_rays, 1, 3)
         directions = directions.reshape(num_rays, 1, 3)
+        directions = directions.expand(-1, self.num_samples, 3)
         t_values = torch.from_numpy(t_values)
         positions = starts + t_values.unsqueeze(-1) * directions
 
@@ -481,7 +486,7 @@ class RaySamplingDataset(Dataset):
         else:
             alphas = None
 
-        return RaySamples(positions, -directions, deltas,
+        return RaySamples(positions, directions, deltas,
                           colors, alphas, t_values)
 
     @staticmethod

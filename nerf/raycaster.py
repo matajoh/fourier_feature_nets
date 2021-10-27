@@ -22,15 +22,17 @@ from .datasets import RaySamples, RaySamplingDataset
 class Raycaster(nn.Module):
     def __init__(self, train_dataset: RaySamplingDataset,
                  val_dataset: RaySamplingDataset,
-                 model: nn.Module, results_dir: str):
+                 model: nn.Module, results_dir: str,
+                 use_view=False):
         nn.Module.__init__(self)
         self.model = model
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
-        self.trainval_dataset = train_dataset.subset(len(val_dataset), True)
+        self.trainval_dataset = train_dataset.subset(val_dataset.num_cameras)
         self._results_dir = results_dir
         self._val_index = 0
         self._use_alpha = train_dataset.alphas is not None
+        self._use_view = use_view
 
         if Run:
             self.run = Run.get_context()
@@ -43,7 +45,12 @@ class Raycaster(nn.Module):
     def render(self, ray_samples: RaySamples) -> torch.Tensor:
         num_rays, num_samples = ray_samples.deltas.shape[:2]
         positions = ray_samples.positions.reshape(-1, 3)
-        color_o = self.model(positions)
+        if self._use_view:
+            views = ray_samples.view_directions.reshape(-1, 3)
+            color_o = self.model(positions, views)
+        else:
+            color_o = self.model(positions)
+
         color_o = color_o.reshape(num_rays, num_samples, 4)
         color, opacity = torch.split(color_o, [3, 1], -1)
         color = torch.sigmoid(color)
@@ -80,11 +87,11 @@ class Raycaster(nn.Module):
         with torch.no_grad():
             device = next(self.model.parameters()).device
             dataset = self.val_dataset if split == "val" else self.trainval_dataset
-            resolution = dataset.resolution
-            num_rays = resolution * resolution
-            if self._val_index * num_rays >= len(dataset):
+            if self._val_index >= dataset.num_cameras:
                 self._val_index = 0
 
+            resolution = dataset.resolution
+            num_rays = resolution * resolution
             index = self._val_index
             image_start = index * num_rays
             image_end = image_start + num_rays
@@ -255,7 +262,13 @@ class Raycaster(nn.Module):
             ray_samples = ray_samples.to(device)
 
             with torch.no_grad():
-                color_o = self.model(ray_samples.positions)
+                positions = ray_samples.positions.reshape(-1, 3)
+                if self._use_view:
+                    views = ray_samples.view_directions.reshape(-1, 3)
+                    color_o = self.model(positions, views)
+                else:
+                    color_o = self.model(positions)
+
                 color_o = color_o.reshape(num_rays, num_samples, 4)
                 color, opacity = torch.split(color_o, [3, 1], -1)
                 color = torch.sigmoid(color)

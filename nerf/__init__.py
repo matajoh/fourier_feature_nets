@@ -6,7 +6,9 @@ from .models import (
     BasicFourierMLP,
     GaussianFourierMLP,
     MLP,
-    PositionalFourierMLP
+    NeRF,
+    PositionalFourierMLP,
+    Voxels
 )
 from .octree import OcTree
 from .raycaster import Raycaster
@@ -16,10 +18,11 @@ from .volume_carving import VolumeCarver
 __all__ = ["CameraInfo",
            "CameraTransform",
            "MLP",
+           "NeRF",
            "BasicFourierMLP",
            "PositionalFourierMLP",
            "GaussianFourierMLP",
-           "FastOcTree",
+           "Voxels",
            "OcTree",
            "PixelDataset",
            "VoxelDataset",
