@@ -20,7 +20,7 @@ def _parse_args():
     parser.add_argument("--num-cameras", type=int, default=100,
                         help="Number of cameras")
     parser.add_argument("--batch-size", type=int, default=1024)
-    parser.add_argument("--learning-rate", type=float, default=0.1)
+    parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--num-steps", type=int, default=50000,
                         help="Number of steps to use for training.")
     parser.add_argument("--report-interval", type=int, default=1000,

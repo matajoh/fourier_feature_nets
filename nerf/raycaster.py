@@ -62,7 +62,8 @@ class Raycaster(nn.Module):
         trans = torch.minimum(ones, 1 - alpha + 1e-10)
         trans, _ = trans.split([num_samples - 1, 1], dim=-2)
         trans = torch.cat([torch.ones_like(trans[:, :1, :]), trans], dim=-2)
-        weights = alpha * torch.cumprod(trans, -2)
+        trans = torch.cumprod(trans, -2)
+        weights = alpha * trans
         output_color = weights * color
         output_color = output_color.sum(-2)
 
@@ -70,7 +71,8 @@ class Raycaster(nn.Module):
             output_depth = weights.squeeze(-1) * ray_samples.t_values
             output_depth = output_depth.sum(-1)
 
-        output_alpha = weights.squeeze(-1).sum(-1)
+        weights = weights[:, :-1, 0]
+        output_alpha = weights.sum(-1)
         return output_color, output_alpha, output_depth
 
     def _loss(self, ray_samples: RaySamples) -> torch.Tensor:

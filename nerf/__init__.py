@@ -13,7 +13,6 @@ from .models import (
 from .octree import OcTree
 from .raycaster import Raycaster
 from .triangulation import Triangulation
-from .volume_carving import VolumeCarver
 
 __all__ = ["CameraInfo",
            "CameraTransform",
@@ -29,5 +28,4 @@ __all__ = ["CameraInfo",
            "Raycaster",
            "RaySamples",
            "RaySamplingDataset",
-           "Triangulation",
-           "VolumeCarver"]
+           "Triangulation"]

@@ -308,3 +308,20 @@ class Voxels(nn.Module):
         output = output.reshape(-1, 4)
         output = output + self.bias
         return output
+
+    def save(self, path: str):
+        """Saves the model to the specified path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: str):
+        """Loads the model from the provided path.
+
+        Args:
+            path (str): Path to the model file on disk
+        """
+        self.load_state_dict(torch.load(path))
+        self.eval()
