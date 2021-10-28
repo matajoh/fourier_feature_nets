@@ -30,7 +30,7 @@ class FourierFeatureMLP(nn.Module):
         self.params = {
             "num_inputs": num_inputs,
             "num_outputs": num_outputs,
-            "frequencies_matrix": frequencies_matrix.tolist() if frequencies_matrix else None,
+            "frequencies_matrix": None if frequencies_matrix is None else frequencies_matrix.tolist(),
             "num_layers": num_layers,
             "num_channels": num_channels,
             "output_sigmoid": output_sigmoid
