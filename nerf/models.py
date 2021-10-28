@@ -2,6 +2,7 @@
 
 import math
 from typing import Sequence
+from numba.core.errors import UnsupportedError
 
 import torch
 import torch.nn as nn
@@ -83,22 +84,9 @@ class FourierFeatureMLP(nn.Module):
             path (str): Path to the model file on disk
         """
         state_dict = self.state_dict()
+        state_dict["type"] = "fourier"
         state_dict["params"] = self.params
         torch.save(state_dict, path)
-
-    @staticmethod
-    def load(path: str) -> "FourierFeatureMLP":
-        """Loads the model from the provided path.
-
-        Args:
-            path (str): Path to the model file on disk
-        """
-        state_dict = torch.load(path)
-        model = FourierFeatureMLP(**state_dict["params"])
-        del state_dict["params"]
-        model.load_state_dict(state_dict)
-        model.eval()
-        return model
 
 
 class MLP(FourierFeatureMLP):
@@ -304,22 +292,9 @@ class NeRF(nn.Module):
             path (str): Path to the model file on disk
         """
         state_dict = self.state_dict()
+        state_dict["type"] = "nerf"
         state_dict["params"] = self.params
         torch.save(state_dict, path)
-
-    @staticmethod
-    def load(path: str) -> "NeRF":
-        """Loads the model from the provided path.
-
-        Args:
-            path (str): Path to the model file on disk
-        """
-        state_dict = torch.load(path)
-        model = NeRF(**state_dict["params"])
-        del state_dict["params"]
-        model.load_state_dict(state_dict)
-        model.eval()
-        return model
 
 
 class Voxels(nn.Module):
@@ -355,19 +330,25 @@ class Voxels(nn.Module):
             path (str): Path to the model file on disk
         """
         state_dict = self.state_dict()
+        state_dict["type"] = "voxels"
         state_dict["params"] = self.params
         torch.save(state_dict, path)
 
-    @staticmethod
-    def load(path: str) -> "Voxels":
-        """Loads the model from the provided path.
 
-        Args:
-            path (str): Path to the model file on disk
-        """
-        state_dict = torch.load(path)
-        model = Voxels(**state_dict["params"])
-        del state_dict["params"]
-        model.load_state_dict(state_dict)
-        model.eval()
-        return model
+def load_model(path: str):
+    state_dict = torch.load(path)
+    if state_dict["type"] == "fourier":
+        model_class = FourierFeatureMLP
+    elif state_dict["type"] == "nerf":
+        model_class = NeRF
+    elif state_dict["type"] == "voxels":
+        model_class = Voxels
+    else:
+        raise UnsupportedError("Unrecognized model type: " + state_dict["type"])
+
+    del state_dict["type"]
+    model = model_class(**state_dict["params"])
+    del state_dict["params"]
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model

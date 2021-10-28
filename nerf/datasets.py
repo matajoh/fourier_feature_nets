@@ -307,9 +307,10 @@ class RaySamples(namedtuple("RaySample", ["positions", "view_directions",
 
 
 class RaySamplingDataset(Dataset):
-    def __init__(self, images: np.ndarray, cameras: List[CameraInfo],
-                 num_samples: int, resolution: int, path_length: int = 128,
-                 voxels: OcTree = None, voxel_weights: np.ndarray = None,
+    def __init__(self, label: str, images: np.ndarray,
+                 cameras: List[CameraInfo], num_samples: int, resolution: int,
+                 path_length: int = 128, voxels: OcTree = None,
+                 voxel_weights: np.ndarray = None,
                  near=2.0, far=6.0, stratified=False):
         """Constructor.
 
@@ -406,6 +407,7 @@ class RaySamplingDataset(Dataset):
             self.weights = np.concatenate(weights)
 
         passed = time.time() - start
+        self.label = label
         self.center_crop = False
         self.resolution = resolution
         self.num_rays = len(self.colors)
@@ -427,12 +429,28 @@ class RaySamplingDataset(Dataset):
     def num_cameras(self) -> int:
         return len(self.cameras)
 
-    def subset(self, num_cameras: int, stratified=False):
-        return RaySamplingDataset(self.images[:num_cameras],
-                                  self.cameras[:num_cameras],
+    def subset(self, cameras: List[int], stratified=False):
+        return RaySamplingDataset(self.label,
+                                  self.images[cameras],
+                                  [self.cameras[i] for i in cameras],
                                   self.num_samples,
                                   self.resolution,
                                   stratified=stratified)
+
+    def sample_cameras(self, num_cameras: int, stratified=False):
+        positions = np.concatenate([cam.position for cam in self.cameras])
+        samples = set([0])
+        all_directions = set(range(len(positions)))
+        while len(samples) < num_cameras:
+            sample_positions = positions[list(samples)]
+            distances = positions[:, None, :] - sample_positions[None, :, :]
+            distances = np.square(distances).sum(-1).min(-1)
+            unchosen = np.array(list(all_directions - samples))
+            distances = np.array(distances[unchosen], np.float32)
+            choice = unchosen[distances.argmax()]
+            samples.add(choice)
+
+        return self.subset(list(samples), stratified)        
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
@@ -542,8 +560,8 @@ class RaySamplingDataset(Dataset):
                                      intr, extr)
                    for i, (intr, extr) in enumerate(zip(intrinsics,
                                                         extrinsics))]
-        return RaySamplingDataset(images, cameras, num_samples, resolution,
-                                  stratified=stratified)
+        return RaySamplingDataset(split, images, cameras, num_samples,
+                                  resolution, stratified=stratified)
 
     def to_scenepic(self, num_cameras=0) -> sp.Scene:
         scene = sp.Scene()

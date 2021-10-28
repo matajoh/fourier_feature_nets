@@ -74,11 +74,11 @@ def _main():
                                                args.resolution,
                                                args.num_samples, False)
 
-    raycaster = nerf.Raycaster(train_dataset, val_dataset, model,
-                               args.results_dir, True)
+    raycaster = nerf.Raycaster(model, True)
     raycaster.to("cuda")
 
-    log = raycaster.fit(args.batch_size, args.learning_rate,
+    log = raycaster.fit(train_dataset, val_dataset, args.results_dir,
+                        args.batch_size, args.learning_rate,
                         args.num_steps, args.report_interval,
                         args.crop_epochs)
 
@@ -91,7 +91,7 @@ def _main():
             file.write("\t".join([str(val) for val in line]) + "\n")
 
     sp_path = os.path.join(args.results_dir, "nerf.html")
-    raycaster.to_scenepic().save_as_html(sp_path)
+    raycaster.to_scenepic(val_dataset).save_as_html(sp_path)
     model.save(os.path.join(args.results_dir, "nerf.pt"))
 
 

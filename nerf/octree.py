@@ -1,14 +1,11 @@
 """Attempt at coding an octree using Numba."""
 
 from collections import deque
-from heapq import heappush, heappop
 from itertools import product
-from typing import Dict, List, Sequence, Set, Tuple, NamedTuple
+from typing import Dict, List, NamedTuple, Sequence, Set, Tuple
 
 from numba import njit
 import numpy as np
-import torch
-import torch.nn as nn
 
 
 Vector = NamedTuple("Vector", [("x", float), ("y", float), ("z", float)])
@@ -96,6 +93,21 @@ Z_POS = 0b001
 XY_MASK = 0b110
 XZ_MASK = 0b101
 YZ_MASK = 0b011
+
+
+@njit
+def _find_child_index_of_node(node: Node, point: Vector) -> Node:
+    child_id = 0
+    if point.x >= node.x:
+        child_id += X_POS
+
+    if point.y >= node.y:
+        child_id += Y_POS
+
+    if point.z >= node.z:
+        child_id += Z_POS
+
+    return child_id
 
 
 @njit
@@ -266,6 +278,15 @@ def _batch_intersect(scale: float,
     return Path(t_stops, leaves)
 
 
+@njit
+def _batch_assign(node: Node, positions: np.ndarray) -> np.ndarray:
+    result = np.zeros(len(positions), np.uint8)
+    for i, (x, y, z) in enumerate(positions):
+        result[i] = _find_child_index_of_node(node, Vector(x, y, z))
+
+    return result
+
+
 def _enumerate_children(node: Node) -> Sequence[Node]:
     scale = node.scale / 2
     child_id = (node.id << 3) + 1
@@ -291,18 +312,6 @@ def _leaf_nodes(scale: float, node_ids: Set[int], leaf_ids: Set[int]) -> List[No
                 queue.append(child)
 
     return leaves
-
-
-def _compute_priority(node: Node, model: nn.Module) -> NodePriority:
-    centers = [[node.x, node.y, node.z]]
-    for child in _enumerate_children(node):
-        centers.append([child.x, child.y, child.z])
-
-    centers = torch.FloatTensor(centers)
-    output = model(centers)
-    opacity = torch.sigmoid(output[:, -3].max()).item()
-    std = output.std(0).mean().item()
-    return NodePriority(node.depth, -std, opacity, node)
 
 
 class OcTree:
@@ -340,10 +349,10 @@ class OcTree:
         return np.array(leaf_centers, np.float32)
 
     def leaf_depths(self) -> np.ndarray:
-        """The N scale values for all leaves."""
+        """The N depths for all leaves."""
         leaves = _leaf_nodes(self._scale, self._node_ids, self._leaf_ids)
         leaf_depths = [leaf.depth for leaf in leaves]
-        return np.array(leaf_depths, np.float32)
+        return np.array(leaf_depths, np.int32)
 
     def __len__(self):
         """Counts all the nodes in the tree."""
@@ -401,31 +410,51 @@ class OcTree:
         return _batch_intersect(self._scale, leaf_index, starts, directions, max_length)      
 
     @staticmethod
-    def build_from_model(model: nn.Module, num_voxels: int, scale: float, threshold: float) -> "OcTree":
+    def build_from_samples(positions: np.ndarray,
+                           colors: np.ndarray,
+                           depth: int,
+                           outlier_depth=6,
+                           min_leaf_size=4) -> Tuple["OcTree", np.ndarray]:
+        min_pos = positions.min(0)
+        max_pos = positions.max(0)
+        scale = (max_pos - min_pos).max() * 0.5
         node = Node(0, 0, 0, 0, scale, 0)
-        heap: List[NodePriority] = []
-        milestone = 0
+        index = np.arange(len(positions))
+        queue = deque([(node, index)])
         node_ids = set()
-        with torch.no_grad():
-            heappush(heap, _compute_priority(node, model))
-            while len(heap) < num_voxels:
-                if len(heap) > milestone:
-                    print(len(heap), "voxels")
-                    milestone += num_voxels // 10
+        leaf_ids = set()
+        leaf_colors = []
+        while queue:
+            node, index = queue.popleft()
+            if node.depth == depth and len(index) >= min_leaf_size:
+                color = colors[index].mean(0)
+                leaf_ids.add(node.id)
+                leaf_colors.append(color)
+            elif node.depth == outlier_depth:
+                node_colors = colors[index]
+                color_mean = node_colors.mean(0)
+                color_std = node_colors.std(0)
+                max_bound = color_mean + color_std
+                min_bound = color_mean - color_std
+                inliers = (node_colors <= max_bound).all(-1) & (node_colors >= min_bound).all(-1)
+                if inliers.any():
+                    colors[index] = node_colors[inliers].mean(0)
 
-                top = heappop(heap)
-                node_ids.add(top.node.id)
-                for child in _enumerate_children(top.node):
-                    priority = _compute_priority(child, model)
-                    if priority.depth < 4 or priority.opacity > threshold:
-                        heappush(heap, priority)
+            if node.depth < depth:
+                node_ids.add(node.id)
+                assignment = _batch_assign(node, positions[index])
+                for i, child in enumerate(_enumerate_children(node)):
+                    child_index = index[assignment == i]
+                    if len(child_index):
+                        queue.append((child, child_index))
 
+        leaf_colors = np.stack(leaf_colors)
         print("done.")
         result = OcTree(1)
-        result._leaf_ids = set(priority.node.id for priority in heap)
+        result._leaf_ids = leaf_ids
         result._node_ids = node_ids - result._leaf_ids
         result._scale = scale
-        return result
+        return result, leaf_colors
 
     @property
     def state_dict(self):

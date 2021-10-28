@@ -9,7 +9,8 @@ from .models import (
     MLP,
     NeRF,
     PositionalFourierMLP,
-    Voxels
+    Voxels,
+    load_model
 )
 from .octree import OcTree
 from .raycaster import Raycaster
@@ -24,6 +25,7 @@ __all__ = ["CameraInfo",
            "PositionalFourierMLP",
            "GaussianFourierMLP",
            "Voxels",
+           "load_model",
            "OcTree",
            "PixelDataset",
            "VoxelDataset",
