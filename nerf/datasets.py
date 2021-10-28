@@ -19,6 +19,7 @@ from torch.utils.data import Dataset, TensorDataset
 
 from .camera_info import CameraInfo
 from .octree import OcTree
+from .utils import ETABar
 
 
 DATASET_URLS = {
@@ -516,21 +517,15 @@ class RaySamplingDataset(Dataset):
         print("Downloading", name, "to", output_path)
         url = _create_onedrive_directdownload(DATASET_URLS[name])
         res = requests.get(url, stream=True)
-        bytes_downloaded = 0
         total_bytes = int(res.headers.get("content-length"))
-        milestone = 0
+        bar = ETABar("Downloading", max=total_bytes)
         with open(output_path, "wb") as file:
             for chunk in res.iter_content(chunk_size=1024):
                 if chunk:
-                    bytes_downloaded += len(chunk)
-                    percent_complete = 100 * bytes_downloaded // total_bytes
-                    if percent_complete >= milestone:
-                        print("{}%".format(percent_complete))
-                        milestone += 10
-
+                    bar.next(len(chunk))
                     file.write(chunk)
 
-        print("Done")
+        bar.finish()
         return True
 
     @staticmethod

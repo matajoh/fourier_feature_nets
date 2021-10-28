@@ -15,9 +15,11 @@ from .models import (
 from .octree import OcTree
 from .raycaster import Raycaster
 from .triangulation import Triangulation
+from .utils import ETABar
 
 __all__ = ["CameraInfo",
            "CameraTransform",
+           "ETABar",
            "MLP",
            "NeRF",
            "BasicFourierMLP",

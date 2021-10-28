@@ -7,6 +7,8 @@ from typing import Dict, List, NamedTuple, Sequence, Set, Tuple
 from numba import njit
 import numpy as np
 
+from .utils import ETABar
+
 
 Vector = NamedTuple("Vector", [("x", float), ("y", float), ("z", float)])
 Node = NamedTuple("Node", [("id", int),
@@ -413,8 +415,7 @@ class OcTree:
     def build_from_samples(positions: np.ndarray,
                            colors: np.ndarray,
                            depth: int,
-                           outlier_depth=6,
-                           min_leaf_size=4) -> Tuple["OcTree", np.ndarray]:
+                           min_leaf_size: int) -> Tuple["OcTree", np.ndarray]:
         min_pos = positions.min(0)
         max_pos = positions.max(0)
         scale = (max_pos - min_pos).max() * 0.5
@@ -424,23 +425,16 @@ class OcTree:
         node_ids = set()
         leaf_ids = set()
         leaf_colors = []
+        bar = ETABar("Generating voxels", max=len(positions))
         while queue:
             node, index = queue.popleft()
-            if node.depth == depth and len(index) >= min_leaf_size:
-                color = colors[index].mean(0)
-                leaf_ids.add(node.id)
-                leaf_colors.append(color)
-            elif node.depth == outlier_depth:
-                node_colors = colors[index]
-                color_mean = node_colors.mean(0)
-                color_std = node_colors.std(0)
-                max_bound = color_mean + color_std
-                min_bound = color_mean - color_std
-                inliers = (node_colors <= max_bound).all(-1) & (node_colors >= min_bound).all(-1)
-                if inliers.any():
-                    colors[index] = node_colors[inliers].mean(0)
-
-            if node.depth < depth:
+            if node.depth == depth:
+                bar.next(len(index))
+                if len(index) >= min_leaf_size:
+                    color = colors[index].mean(0)
+                    leaf_ids.add(node.id)
+                    leaf_colors.append(color)
+            elif node.depth < depth:
                 node_ids.add(node.id)
                 assignment = _batch_assign(node, positions[index])
                 for i, child in enumerate(_enumerate_children(node)):
@@ -448,8 +442,8 @@ class OcTree:
                     if len(child_index):
                         queue.append((child, child_index))
 
+        bar.finish()
         leaf_colors = np.stack(leaf_colors)
-        print("done.")
         result = OcTree(1)
         result._leaf_ids = leaf_ids
         result._node_ids = node_ids - result._leaf_ids
