@@ -1,3 +1,5 @@
+"""Produces a visualization of a ray sampling dataset."""
+
 import argparse
 
 from nerf import RaySamplingDataset

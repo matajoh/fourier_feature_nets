@@ -1,8 +1,8 @@
-"""Attempt at coding an octree using Numba."""
+"""Module containing an optimized implementation of an OcTree."""
 
 from collections import deque
 from itertools import product
-from typing import Dict, List, NamedTuple, Sequence, Set, Tuple
+from typing import Dict, List, NamedTuple, Sequence, Set, Tuple, Union
 
 from numba import njit
 import numpy as np
@@ -421,9 +421,22 @@ class OcTree:
 
     @staticmethod
     def build_from_samples(positions: np.ndarray,
-                           colors: np.ndarray,
+                           data: np.ndarray,
                            depth: int,
                            min_leaf_size: int) -> Tuple["OcTree", np.ndarray]:
+        """Builds a sparse OcTree from the provided position samples.
+
+        Args:
+            positions (np.ndarray): a (N,3) tensor of positions
+            data (np.ndarray): a (N,3) tensor of position data
+            depth (int): The depth at which stop growing the tree.
+            min_leaf_size (int): The minimum number of contained positions
+                                 needed for a leaf to be created.
+
+        Returns:
+            OcTree: the constructed sparse OcTree
+            leaf_data: the mean of the data contained in a leaf
+        """
         min_pos = positions.min(0)
         max_pos = positions.max(0)
         scale = (max_pos - min_pos).max() * 0.5
@@ -432,16 +445,15 @@ class OcTree:
         queue = deque([(node, index)])
         node_ids = set()
         leaf_ids = set()
-        leaf_colors = []
+        leaf_data = []
         bar = ChargingBar("Generating voxels", max=len(positions))
         while queue:
             node, index = queue.popleft()
             if node.depth == depth:
                 bar.next(len(index))
                 if len(index) >= min_leaf_size:
-                    color = colors[index].mean(0)
                     leaf_ids.add(node.id)
-                    leaf_colors.append(color)
+                    leaf_data.append(data[index].mean(0))
             elif node.depth < depth:
                 node_ids.add(node.id)
                 assignment = _batch_assign(node, positions[index])
@@ -451,28 +463,37 @@ class OcTree:
                         queue.append((child, child_index))
 
         bar.finish()
-        leaf_colors = np.stack(leaf_colors)
+        leaf_data = np.stack(leaf_data)
         result = OcTree(1)
         result._leaf_ids = leaf_ids
         result._node_ids = node_ids - result._leaf_ids
         result._scale = scale
-        return result, leaf_colors
+        return result, leaf_data
 
     @property
-    def state_dict(self):
-        leaf_index = list(sorted(self._leaf_ids))
-        leaf_index = np.array(leaf_index, np.int64)
+    def state_dict(self) -> Dict[str, np.ndarray]:
+        """The state needed to reconstruct the OcTree."""
         return {
-            "leaf_index": leaf_index,
+            "node_index": self._node_index,
+            "leaf_index": self._leaf_index,
             "scale": self._scale
         }
 
     def save(self, path: str):
+        """Saves the OcTree to the provided path."""
         state = self.state_dict
         np.savez(path, **state)
 
     @staticmethod
-    def load(path_or_data) -> "OcTree":
+    def load(path_or_data: Union[str, Dict[str, np.ndarray]]) -> "OcTree":
+        """Loads the OcTree.
+
+        Args:
+            path_or_data: either the path to the data file, or a state dict.
+
+        Returns:
+            The stored OcTree
+        """
         if isinstance(path_or_data, str):
             data = np.load(path_or_data)
         else:
@@ -483,5 +504,7 @@ class OcTree:
         return result
 
     def load_state(self, state_dict: Dict[str, np.ndarray]):
+        """Loads the information from the state dictionary."""
+        self._node_ids = set([int(index) for index in state_dict["node_index"]])
         self._leaf_ids = set([int(index) for index in state_dict["leaf_index"]])
         self._scale = float(state_dict["scale"])

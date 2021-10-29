@@ -12,4 +12,9 @@ class ETABar(Bar):
     fill = "█"
 
     def info(self, text: str):
+        """Appends the given information to the progress bar message.
+
+        Args:
+            text (str): A status message for the progress bar.
+        """
         self.suffix = "%(percent).1f%% - %(eta)ds {}".format(text)

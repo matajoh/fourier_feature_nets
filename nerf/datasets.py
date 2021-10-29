@@ -5,7 +5,7 @@ from collections import namedtuple
 import math
 import sys
 import time
-from typing import List, Union
+from typing import List, NamedTuple, Union
 
 import cv2
 from matplotlib.pyplot import get_cmap
@@ -295,8 +295,11 @@ def _sample_t_values(t_starts: np.ndarray, t_ends: np.ndarray,
     return t_values
 
 
-class RaySamples(namedtuple("RaySamples", ["positions", "view_directions",
-                                           "colors", "alphas", "t_values"])):
+class RaySamples(NamedTuple("RaySamples", [("positions", torch.Tensor),
+                                           ("view_directions", torch.Tensor),
+                                           ("colors", torch.Tensor),
+                                           ("alphas", torch.Tensor),
+                                           ("t_values", torch.Tensor)])):
     """Points samples from rays.
 
     Description:

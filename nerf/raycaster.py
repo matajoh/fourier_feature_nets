@@ -1,6 +1,9 @@
+"""Module implementing a differentiable volumetric raycaster."""
+
 import os
 import sys
 import time
+from typing import NamedTuple
 
 import cv2
 from matplotlib.pyplot import get_cmap
@@ -19,15 +22,41 @@ except ImportError:
 from .datasets import RaySamples, RaySamplingDataset
 
 
+RenderResult = NamedTuple("RenderResult", [("color", torch.Tensor),
+                                           ("alpha", torch.Tensor),
+                                           ("depth", torch.Tensor)])
+LogEntry = NamedTuple("LogEntry", [("step", int), ("timestamp", float),
+                                   ("train_psnr", float), ("val_psnr", float)])
+
+
 class Raycaster(nn.Module):
+    """Implementation of a volumetric raycaster."""
+
     def __init__(self, model: nn.Module, use_view=False):
+        """Constructor.
+
+        Args:
+            model (nn.Module): The model used to predict color and opacity.
+            use_view (bool, optional): Whether to pass view information to
+                                       the model. Defaults to False.
+        """
         nn.Module.__init__(self)
         self.model = model
         self._use_alpha = False
         self._use_view = use_view
 
     def render(self, ray_samples: RaySamples,
-               include_depth=False) -> torch.Tensor:
+               include_depth=False) -> RenderResult:
+        """Render the ray samples.
+
+        Args:
+            ray_samples (RaySamples): The ray samples to render.
+            include_depth (bool, optional): Whether to render depth.
+                                            Defaults to False.
+
+        Returns:
+            RenderResult: The per-ray rendering result.
+        """
         num_rays, num_samples = ray_samples.positions.shape[:2]
         positions = ray_samples.positions.reshape(-1, 3)
         if self._use_view:
@@ -68,7 +97,7 @@ class Raycaster(nn.Module):
         else:
             output_depth = None
 
-        return output_color, output_alpha, output_depth
+        return RenderResult(output_color, output_alpha, output_depth)
 
     def _loss(self, ray_samples: RaySamples) -> torch.Tensor:
         device = next(self.model.parameters()).device
@@ -163,6 +192,22 @@ class Raycaster(nn.Module):
             num_steps: int,
             reporting_interval: int,
             crop_epochs: int):
+        """Fits the volumetric model using the raycaster.
+
+        Args:
+            train_dataset (RaySamplingDataset): The train dataset.
+            val_dataset (RaySamplingDataset): The validation dataset.
+            results_dir (str): The output directory for results images.
+            batch_size (int): The ray batch size.
+            learning_rate (float): Learning rate for the model.
+            num_steps (int): Number of steps (i.e. batches) to use for training.
+            reporting_interval (int): Number of steps between logging and images
+            crop_epochs (int): Number of epochs to use center-cropped data at
+                               the beginning of training.
+
+        Returns:
+            List[LogEntry]: logging information from the training run
+        """
         if Run:
             run = Run.get_context()
         else:
@@ -224,7 +269,8 @@ class Raycaster(nn.Module):
                         run.log("psnr_val", val_psnr)
                         run.log("time_per_step", time_per_step)
 
-                    log.append((step, timestamp - start_time, train_psnr, val_psnr))
+                    log.append(LogEntry(step, timestamp - start_time,
+                                        train_psnr, val_psnr))
                     render_index += 1
 
                 step += 1
@@ -233,8 +279,26 @@ class Raycaster(nn.Module):
 
         return log
 
-    def to_scenepic(self, dataset, num_cameras=10,
-                    resolution=50, num_samples=64) -> sp.Scene:
+    def to_scenepic(self, dataset: RaySamplingDataset, num_cameras=10,
+                    resolution=50, num_samples=64,
+                    empty_threshold=0.1) -> sp.Scene:
+        """Creates a scenepic displaying the state of the volumetric model.
+
+        Args:
+            dataset (RaySamplingDataset): The dataset to use for visualization.
+            num_cameras (int, optional): Number of cameras to show.
+                                         Defaults to 10.
+            resolution (int, optional): Resolution to use for ray sampling.
+                                        Defaults to 50.
+            num_samples (int, optional): Number of samples per ray.
+                                         Defaults to 64.
+            empty_threshold (float, optional): Opacity threshold to determine if
+                                               a sample is "empty".
+                                               Defaults to 0.1.
+
+        Returns:
+            sp.Scene: The constructed scenepic
+        """
         dataset = RaySamplingDataset("scenepic",
                                      dataset.images[:num_cameras],
                                      dataset.cameras[:num_cameras],
@@ -298,7 +362,7 @@ class Raycaster(nn.Module):
             color = color.cpu().numpy().reshape(-1, 3)
             opacity = opacity.reshape(-1).cpu().numpy()
 
-            empty = opacity < 0.1
+            empty = opacity < empty_threshold
             not_empty = np.logical_not(empty)
 
             samples = scene.create_mesh()
