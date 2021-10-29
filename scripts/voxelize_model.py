@@ -76,7 +76,7 @@ def _main():
         mesh.add_cube(sp.Colors.White, transform=transform)
         depth_centers = leaf_centers[leaf_depths == depth]
         depth_colors = leaf_colors[leaf_depths == depth]
-        mesh.enable_instancing(depth_centers, colors=depth_colors)       
+        mesh.enable_instancing(depth_centers, colors=depth_colors)
         frame.add_mesh(mesh)
 
     scene.save_as_html(args.output_path)
