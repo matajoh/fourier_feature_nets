@@ -1,3 +1,5 @@
+"""Trains a full NeRF model."""
+
 import argparse
 import json
 import os

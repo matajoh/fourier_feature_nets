@@ -1,3 +1,5 @@
+"""Interprets a volumetric model function as voxels."""
+
 import argparse
 
 import nerf

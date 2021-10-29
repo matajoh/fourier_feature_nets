@@ -1,3 +1,5 @@
+"""Trains a Tiny NeRF model (only positional data)."""
+
 import argparse
 import json
 import os

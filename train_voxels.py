@@ -1,3 +1,5 @@
+"""Trains a voxelized volumetric representation from images."""
+
 import argparse
 import json
 import os
