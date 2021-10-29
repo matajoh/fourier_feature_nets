@@ -27,8 +27,8 @@ class Raycaster(nn.Module):
         self._use_view = use_view
 
     def render(self, ray_samples: RaySamples,
-               include_depth=False, depth_opacity=0.95) -> torch.Tensor:
-        num_rays, num_samples = ray_samples.deltas.shape[:2]
+               include_depth=False) -> torch.Tensor:
+        num_rays, num_samples = ray_samples.positions.shape[:2]
         positions = ray_samples.positions.reshape(-1, 3)
         if self._use_view:
             views = ray_samples.view_directions.reshape(-1, 3)
@@ -41,7 +41,12 @@ class Raycaster(nn.Module):
         color = torch.sigmoid(color)
         opacity = F.softplus(opacity)
 
-        alpha = 1 - torch.exp(-(opacity * ray_samples.deltas))
+        deltas = ray_samples.t_values[:, 1:] - ray_samples.t_values[:, :-1]
+        max_dist = torch.full_like(deltas[:, :1], 1e10)
+        deltas = torch.cat([deltas, max_dist], dim=-1)
+        deltas = deltas.unsqueeze(-1)
+
+        alpha = 1 - torch.exp(-(opacity * deltas))
         ones = torch.ones_like(alpha)
 
         trans = torch.minimum(ones, 1 - alpha + 1e-10)

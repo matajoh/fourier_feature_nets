@@ -5,15 +5,17 @@ from collections import namedtuple
 import math
 import sys
 import time
-from typing import List
+from typing import List, Union
 
 import cv2
 from matplotlib.pyplot import get_cmap
 from numba import njit
+from numba.core.errors import UnsupportedError
 import numpy as np
 import requests
 import scenepic as sp
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, TensorDataset
 
@@ -293,14 +295,33 @@ def _sample_t_values(t_starts: np.ndarray, t_ends: np.ndarray,
     return t_values
 
 
-class RaySamples(namedtuple("RaySample", ["positions", "view_directions",
-                                          "deltas", "colors", "alphas",
-                                          "t_values"])):
+class RaySamples(namedtuple("RaySamples", ["positions", "view_directions",
+                                           "colors", "alphas", "t_values"])):
+    """Points samples from rays.
+
+    Description:
+        Each sample is the result of the following equation:
+
+            start + direction * t
+
+        Where start is the position of the camera, and direction is the
+        direction of a ray passing through a pixel in an image from that
+        camera. The samples consist of the following parts:
+
+            positions: the 3D positions
+            view_directions: the direction from each position back to the camera
+            colors: the pixel colors for the ray
+            alphas: the alpha values for the ray (if present in the data)
+            t_values: the t_values corresponding to the positions
+
+        Each tensor is grouped by ray, so the first two dimensions will be
+        (num_rays,num_samples).
+    """
     def to(self, *args) -> "RaySamples":
+        """Calls torch.to on each tensor in the sample."""
         return RaySamples(
             self.positions.to(*args),
             self.view_directions.to(*args),
-            self.deltas.to(*args),
             self.colors.to(*args),
             self.alphas.to(*args),
             self.t_values.to(*args),
@@ -308,36 +329,54 @@ class RaySamples(namedtuple("RaySample", ["positions", "view_directions",
 
 
 class RaySamplingDataset(Dataset):
+    """Dataset for sampling from rays cast into a volume."""
+
     def __init__(self, label: str, images: np.ndarray,
                  cameras: List[CameraInfo], num_samples: int, resolution: int,
-                 path_length: int = 128, voxels: OcTree = None,
-                 voxel_weights: np.ndarray = None,
-                 near=2.0, far=6.0, stratified=False):
+                 opacity_model: nn.Module = None,
+                 near=2.0, far=6.0, stratified=False,
+                 alpha_only=False):
         """Constructor.
 
         Args:
+            label (str): Label used to identify this dataset.
             images (np.ndarray): Images of the object from each camera
             cameras (List[CameraInfo]): List of all cameras in the scene
-            path_length (int): The maximum number of voxels to intersect with
             num_samples (int): The number of samples to take per ray
             resolution (int): The ray sampling resolution
-            voxels (OcTree, optional): The OcTree describing the voxellization
-            voxel_weights (np.ndarray, optional): Per-voxel weights to use for
-                                                  sampling. Defaults to None
-                                                  (i.e. uniform)
+            opacity_model (nn.Module, optional): Optional model which predicts
+                                                 opacity in the volume, used
+                                                 for performing targeted
+                                                 sampling if provided. Defaults
+                                                 to None/
             near (float, optional): Near value to use when performing uniform
                                     sampling along rays
             far (float, optional): Far value to use when performing uniform
                                    sampling along rays
             stratified (bool, optional): Whether to use stratified random
                                          sampling
+            alpha_only (bool, optional): Whether to only use the alpha channel
+                                         of the image (if present). Defaults
+                                         to False.
         """
         assert len(images.shape) == 4
         assert len(images) == len(cameras)
         if images.dtype == np.uint8:
             images = images.astype(np.float32) / 255
 
-        print("Casting rays...")
+        self.focus_sampling = opacity_model is not None
+        self.label = label
+        self.center_crop = False
+        self.resolution = resolution
+        self.num_rays = len(cameras) * resolution * resolution
+        self.num_samples = num_samples
+        self.images = images
+        self.cameras = cameras
+        self.near = near
+        self.far = far
+        self.stratified = stratified
+
+        bar = ETABar("Casting rays", max=self.num_rays)
         source_resolution = images.shape[1]
         scale = source_resolution / resolution
 
@@ -352,43 +391,41 @@ class RaySamplingDataset(Dataset):
         inside_crop = inside_crop.all(-1)
         crop_points = np.nonzero(inside_crop)[0]
 
-        start = time.time()
         starts = []
         directions = []
-        t_starts = []
-        t_ends = []
         colors = []
         alphas = []
-        weights = []
         crop_index = []
         for camera, image in zip(cameras, images):
-            print(camera.name)
+            bar.next(resolution * resolution)
+            bar.info(camera.name)
             cam_starts, cam_directions = camera.raycast(points)
             cam_colors = image[points[:, 1], points[:, 0]]
             if image.shape[-1] == 4:
-                colors.append(cam_colors[..., :3].reshape(-1, 3))
+                if not alpha_only:
+                    colors.append(cam_colors[..., :3].reshape(-1, 3))
+
                 alphas.append(cam_colors[..., 3].reshape(-1))
             else:
+                if alpha_only:
+                    raise UnsupportedError("No alpha channel available.")
+
                 colors.append(cam_colors.reshape(-1, 3))
 
             starts.append(cam_starts)
             directions.append(cam_directions)
             crop_index.append(crop_points + len(crop_index) * len(points))
-            if voxels is not None:
-                path = voxels.intersect(cam_starts, cam_directions, path_length)
-                t_starts.append(path.t_stops[:, :-1])
-                t_ends.append(path.t_stops[:, 1:])
-                weights.append(_determine_weights(path.leaves, t_starts[-1],
-                                                  t_ends[-1], voxel_weights))
+            if self.focus_sampling:
+                pass
+
+        bar.finish()
 
         starts = np.concatenate(starts)
         directions = np.concatenate(directions)
-        colors = np.concatenate(colors)
         crop_index = np.concatenate(crop_index)
 
         self.starts = torch.from_numpy(starts)
         self.directions = torch.from_numpy(directions)
-        self.colors = torch.from_numpy(colors)
 
         if len(alphas) > 0:
             alphas = np.concatenate(alphas)
@@ -396,31 +433,19 @@ class RaySamplingDataset(Dataset):
         else:
             self.alphas = None
 
-        self.crop_index = torch.from_numpy(crop_index)
-        if voxels is None:
-            self.uniform_sampling = True
-            self.near = near
-            self.far = far
-            self.stratified = stratified
+        if len(colors) > 0:
+            colors = np.concatenate(colors)
+            self.colors = torch.from_numpy(colors)
         else:
-            self.t_starts = np.concatenate(t_starts)
-            self.t_ends = np.concatenate(t_ends)
-            self.weights = np.concatenate(weights)
+            self.colors = None
 
-        passed = time.time() - start
-        self.label = label
-        self.center_crop = False
-        self.resolution = resolution
-        self.num_rays = len(self.colors)
-        self.num_samples = num_samples
-        self.images = images
-        self.cameras = cameras
+        self.crop_index = torch.from_numpy(crop_index)
 
-        if not self.uniform_sampling:
-            print(passed, "elapsed,", self.num_rays, "rays at",
-                  passed / self.num_rays, "s/ray")
+        if self.focus_sampling:
+            pass
 
     def __len__(self) -> int:
+        """The number of rays in the dataset."""
         if self.center_crop:
             return len(self.crop_index)
 
@@ -428,9 +453,21 @@ class RaySamplingDataset(Dataset):
 
     @property
     def num_cameras(self) -> int:
+        """The number of cameras in the dataset."""
         return len(self.cameras)
 
-    def subset(self, cameras: List[int], stratified=False):
+    def subset(self, cameras: List[int],
+               stratified=False) -> "RaySamplingDataset":
+        """Returns a subset of this dataset (by camera).
+
+        Args:
+            cameras (List[int]): List of camera indices
+            stratified (bool, optional): Whether to use stratified sampling.
+                                         Defaults to False.
+
+        Returns:
+            RaySamplingDataset: New dataset with the subset of cameras
+        """
         return RaySamplingDataset(self.label,
                                   self.images[cameras],
                                   [self.cameras[i] for i in cameras],
@@ -438,7 +475,21 @@ class RaySamplingDataset(Dataset):
                                   self.resolution,
                                   stratified=stratified)
 
-    def sample_cameras(self, num_cameras: int, stratified=False):
+    def sample_cameras(self, num_cameras: int,
+                       stratified=False) -> "RaySamplingDataset":
+        """Samples cameras from the dataset and returns the subset.
+
+        Description:
+            Cameras are sampled such that they are as equidistant as possible.
+
+        Args:
+            num_cameras (int): Number of cameras to sample.
+            stratified (bool, optional): Whether to use stratified sampling
+                                         in the new dataset.. Defaults to False.
+
+        Returns:
+            RaySamplingDataset: a subset of the dataset with the sampled cameras
+        """
         positions = np.concatenate([cam.position for cam in self.cameras])
         samples = set([0])
         all_directions = set(range(len(positions)))
@@ -451,9 +502,10 @@ class RaySamplingDataset(Dataset):
             choice = unchosen[distances.argmax()]
             samples.add(choice)
 
-        return self.subset(list(samples), stratified)        
+        return self.subset(list(samples), stratified)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: Union[List[int], torch.Tensor]) -> RaySamples:
+        """Returns the requested sampled rays."""
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
@@ -469,24 +521,17 @@ class RaySamplingDataset(Dataset):
         starts = self.starts[idx]
         directions = self.directions[idx]
 
-        if self.uniform_sampling:
-            t_values = np.linspace(self.near, self.far, self.num_samples,
-                                   dtype=np.float32)
-            t_values = t_values.reshape(1, self.num_samples)
-            if self.stratified:
-                scale = (self.far - self.near) / self.num_samples
-                permute = np.random.uniform(size=(num_rays, self.num_samples))
-                permute = (permute * scale).astype(np.float32)
-            else:
-                permute = np.zeros((num_rays, self.num_samples), np.float32)
-
-            t_values = t_values + permute
+        t_values = np.linspace(self.near, self.far, self.num_samples,
+                               dtype=np.float32)
+        t_values = t_values.reshape(1, self.num_samples)
+        if self.stratified:
+            scale = (self.far - self.near) / self.num_samples
+            permute = np.random.uniform(size=(num_rays, self.num_samples))
+            permute = (permute * scale).astype(np.float32)
         else:
-            t_starts = self.t_starts[idx]
-            t_ends = self.t_ends[idx]
-            weights = self.weights[idx]
+            permute = np.zeros((num_rays, self.num_samples), np.float32)
 
-            t_values = _sample_t_values(t_starts, t_ends, weights, self.num_samples)
+        t_values = t_values + permute
 
         starts = starts.reshape(num_rays, 1, 3)
         directions = directions.reshape(num_rays, 1, 3)
@@ -494,22 +539,25 @@ class RaySamplingDataset(Dataset):
         t_values = torch.from_numpy(t_values)
         positions = starts + t_values.unsqueeze(-1) * directions
 
-        max_dist = torch.full((num_rays, 1), 1e10, dtype=torch.float32)
-        deltas = t_values[:, 1:] - t_values[:, :-1]
-        deltas = torch.cat([deltas, max_dist], dim=-1)
-        deltas = deltas.unsqueeze(-1)
-
         colors = self.colors[idx]
         if len(self.alphas) > 0:
             alphas = self.alphas[idx]
         else:
             alphas = None
 
-        return RaySamples(positions, directions, deltas,
-                          colors, alphas, t_values)
+        return RaySamples(positions, directions, colors, alphas, t_values)
 
     @staticmethod
     def download(name: str, output_path: str) -> bool:
+        """Downloads one of the known datasets.
+
+        Args:
+            name (str): Either "lego_400" or "antinous_400"
+            output_path (str): Path to the downloaded NPZ
+
+        Returns:
+            bool: whether the download was successful
+        """
         if name not in DATASET_URLS:
             print("Unrecognized dataset:", name)
             return False
@@ -531,6 +579,20 @@ class RaySamplingDataset(Dataset):
     @staticmethod
     def load(path: str, split: str, resolution: int,
              num_samples: int, stratified: bool) -> "RaySamplingDataset":
+        """Loads a dataset from an NPZ file.
+
+        Description:
+            The NPZ file should contain the following elements:
+
+            images: a (NxRxRx[3,4]) tensor of images in RGB(A) format.
+            intrinsics: a (Nx3x3) tensor of camera intrinsics (projection)
+            extrinsics: a (Nx4x4) tensor of camera extrinsics (camera to world)
+            split_counts: a (3) tensor of counts per split in train, val, test
+                          order
+
+        Returns:
+            RaySamplingDataset: A dataset made from the camera and image data
+        """
         data = np.load(path)
         test_end, height, width = data["images"].shape[:3]
         split_counts = data["split_counts"]
@@ -558,23 +620,17 @@ class RaySamplingDataset(Dataset):
         return RaySamplingDataset(split, images, cameras, num_samples,
                                   resolution, stratified=stratified)
 
-    def to_scenepic(self, num_cameras=0) -> sp.Scene:
+    def to_scenepic(self) -> sp.Scene:
+        """Creates a ray sampling visualization ScenePic for the dataset."""
         scene = sp.Scene()
         frustums = scene.create_mesh("frustums", layer_id="frustums")
         canvas = scene.create_canvas_3d(width=800,
                                         height=800)
         canvas.shading = sp.Shading(sp.Colors.Gray)
 
-        if num_cameras:
-            idx = np.random.choice(len(self.cameras), num_cameras,
-                                   replace=False)
-            idx = idx.tolist()
-            images = self.images[idx]
-            cameras = [self.cameras[i] for i in idx]
-        else:
-            idx = np.arange(len(self.cameras))
-            images = self.images
-            cameras = self.cameras
+        idx = np.arange(len(self.cameras))
+        images = self.images
+        cameras = self.cameras
 
         cmap = get_cmap("jet")
         camera_colors = cmap(np.linspace(0, 1, len(cameras)))[:, :3]

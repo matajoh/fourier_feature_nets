@@ -24,7 +24,10 @@ def _main():
 
     dataset = RaySamplingDataset.load(args.data_path, args.split, args.resolution,
                                       args.num_samples, args.stratified)
-    scene = dataset.to_scenepic(args.num_cameras)
+    if args.num_cameras < dataset.num_cameras:
+        dataset = dataset.sample_cameras(args.num_cameras)
+
+    scene = dataset.to_scenepic()
     scene.save_as_html("ray_sampling.html", "Ray Sampling")
 
 

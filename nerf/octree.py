@@ -6,8 +6,7 @@ from typing import Dict, List, NamedTuple, Sequence, Set, Tuple
 
 from numba import njit
 import numpy as np
-
-from .utils import ETABar
+from progress.bar import ChargingBar
 
 
 Vector = NamedTuple("Vector", [("x", float), ("y", float), ("z", float)])
@@ -218,9 +217,9 @@ def _find_sibling_of_node(node: Node, point: Vector, axis: int) -> Node:
 
 
 @njit
-def _trace_ray_path(scale: float, leaf_index: np.ndarray,
-                    start: np.ndarray, direction: np.ndarray,
-                    max_length) -> Path:
+def _trace_ray_path(scale: float, node_index: np.ndarray,
+                    leaf_index: np.ndarray, start: np.ndarray,
+                    direction: np.ndarray, max_length: int) -> Path:
     stack = [Node(0, 0.0, 0.0, 0.0, scale, 0)]
     ray = Ray(start[0], start[1], start[2],
               direction[0], direction[1], direction[2])
@@ -254,9 +253,13 @@ def _trace_ray_path(scale: float, leaf_index: np.ndarray,
             if sibling != current:
                 stack.append(sibling)
         else:
-            if _node_contains(current, point):
-                child = _find_child_of_node(current, point)
-                stack.append(child)
+            index = np.searchsorted(node_index, current.id)
+            if node_index[index] == current.id:
+                if _node_contains(current, point):
+                    child = _find_child_of_node(current, point)
+                    stack.append(child)
+                else:
+                    stack.pop()
             else:
                 stack.pop()
 
@@ -265,6 +268,7 @@ def _trace_ray_path(scale: float, leaf_index: np.ndarray,
 
 @njit
 def _batch_intersect(scale: float,
+                     node_index: np.ndarray,
                      leaf_index: np.ndarray,
                      starts: np.ndarray,
                      directions: np.ndarray,
@@ -273,7 +277,8 @@ def _batch_intersect(scale: float,
     t_stops = np.zeros((num_rays, max_length), np.float32)
     leaves = np.zeros((num_rays, max_length), np.int64)
     for ray, (start, direction) in enumerate(zip(starts, directions)):
-        path = _trace_ray_path(scale, leaf_index, start, direction, max_length)
+        path = _trace_ray_path(scale, node_index, leaf_index,
+                               start, direction, max_length)
         t_stops[ray] = path.t_stops
         leaves[ray] = path.leaves
 
@@ -344,6 +349,11 @@ class OcTree:
             for child_id in range(child_start, child_end):
                 queue.append((child_id, level + 1))
 
+        leaf_index = list(sorted(self._leaf_ids))
+        self._leaf_index = np.array(leaf_index)
+        node_index = list(sorted(self._node_ids))
+        self._node_index = np.array(node_index)
+
     def leaf_centers(self) -> np.ndarray:
         """The Nx3 center coordinates of all leaves."""
         leaves = _leaf_nodes(self._scale, self._node_ids, self._leaf_ids)
@@ -406,10 +416,8 @@ class OcTree:
 
         directions = np.where(directions == 0, 1e-8, directions)
 
-        leaf_index = list(sorted(self._leaf_ids))
-        leaf_index = np.array(leaf_index)
-        # TODO for sparse trees this won't work
-        return _batch_intersect(self._scale, leaf_index, starts, directions, max_length)      
+        return _batch_intersect(self._scale, self._node_index, self._leaf_index,
+                                starts, directions, max_length)
 
     @staticmethod
     def build_from_samples(positions: np.ndarray,
@@ -425,7 +433,7 @@ class OcTree:
         node_ids = set()
         leaf_ids = set()
         leaf_colors = []
-        bar = ETABar("Generating voxels", max=len(positions))
+        bar = ChargingBar("Generating voxels", max=len(positions))
         while queue:
             node, index = queue.popleft()
             if node.depth == depth:
