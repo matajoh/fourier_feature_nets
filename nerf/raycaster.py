@@ -1,7 +1,6 @@
 """Module implementing a differentiable volumetric raycaster."""
 
 import os
-import sys
 import time
 from typing import NamedTuple
 
@@ -20,6 +19,7 @@ except ImportError:
     print("Unable to import AzureML, running as local experiment")
 
 from .datasets import RaySamples, RaySamplingDataset
+from .utils import calculate_blend_weights, ETABar
 
 
 RenderResult = NamedTuple("RenderResult", [("color", torch.Tensor),
@@ -70,23 +70,13 @@ class Raycaster(nn.Module):
         color = torch.sigmoid(color)
         opacity = F.softplus(opacity)
 
-        deltas = ray_samples.t_values[:, 1:] - ray_samples.t_values[:, :-1]
-        max_dist = torch.full_like(deltas[:, :1], 1e10)
-        deltas = torch.cat([deltas, max_dist], dim=-1)
-        deltas = deltas.unsqueeze(-1)
+        opacity = opacity.squeeze(-1)
+        weights = calculate_blend_weights(ray_samples.t_values, opacity)
 
-        alpha = 1 - torch.exp(-(opacity * deltas))
-        ones = torch.ones_like(alpha)
-
-        trans = torch.minimum(ones, 1 - alpha + 1e-10)
-        trans, _ = trans.split([num_samples - 1, 1], dim=-2)
-        trans = torch.cat([torch.ones_like(trans[:, :1, :]), trans], dim=-2)
-        trans = torch.cumprod(trans, -2)
-        weights = alpha * trans
-        output_color = weights * color
+        output_color = weights.unsqueeze(-1) * color
         output_color = output_color.sum(-2)
 
-        weights = weights[:, :-1, 0]
+        weights = weights[:, :-1]
         output_alpha = weights.sum(-1)
 
         if include_depth:
@@ -314,11 +304,10 @@ class Raycaster(nn.Module):
         cmap = get_cmap("jet")
         camera_colors = cmap(np.linspace(0, 1, len(dataset.cameras)))[:, :3]
         image_meshes = []
-        sys.stdout.write("Adding cameras")
+        bar = ETABar("Adding cameras", max=dataset.num_cameras)
         for pixels, camera, color in zip(dataset.images, dataset.cameras,
                                          camera_colors):
-            sys.stdout.write(".")
-            sys.stdout.flush()
+            bar.next()
             camera = camera.to_scenepic()
 
             image = scene.create_image()
@@ -331,14 +320,13 @@ class Raycaster(nn.Module):
 
             frustums.add_camera_frustum(camera, color, depth=0.5, thickness=0.01)
 
-        print("done.")
+        bar.finish()
 
-        sys.stdout.write("Sampling rays...")
+        bar = ETABar("Sampling rays", max=dataset.num_cameras)
         num_rays = dataset.resolution ** 2
         device = next(self.model.parameters()).device
         for i, camera in enumerate(dataset.cameras):
-            sys.stdout.write(".")
-            sys.stdout.flush()
+            bar.next()
             start = i * num_rays
             end = start + num_rays
             index = [i for i in range(start, end)]
@@ -383,7 +371,7 @@ class Raycaster(nn.Module):
             for mesh in image_meshes:
                 frame.add_mesh(mesh)
 
-        print("done.")
+        bar.finish()
 
         scene.framerate = 10
         return scene

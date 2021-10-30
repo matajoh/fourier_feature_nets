@@ -1,7 +1,7 @@
 """Module created for [my NeRF lecture]."""
 
 from .camera_info import CameraInfo
-from .datasets import PixelDataset, RaySamples, RaySamplingDataset, VoxelDataset
+from .datasets import PixelDataset, RaySamples, RaySamplingDataset
 from .models import (
     BasicFourierMLP,
     GaussianFourierMLP,
@@ -30,7 +30,6 @@ __all__ = ["CameraInfo",
            "load_model",
            "OcTree",
            "PixelDataset",
-           "VoxelDataset",
            "Raycaster",
            "RaySamples",
            "RaySamplingDataset",
