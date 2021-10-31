@@ -53,7 +53,7 @@ def _main():
 
     train_dataset = nerf.RaySamplingDataset.load(data_path, "train",
                                                  args.resolution,
-                                                 args.num_samples, False)
+                                                 args.num_samples, True)
     val_dataset = nerf.RaySamplingDataset.load(data_path, "val",
                                                args.resolution,
                                                args.num_samples, False)

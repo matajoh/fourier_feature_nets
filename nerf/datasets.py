@@ -238,7 +238,7 @@ class RaySamplingDataset(Dataset):
     def __init__(self, label: str, images: np.ndarray,
                  cameras: List[CameraInfo], num_samples: int, resolution: int,
                  stratified=False, opacity_model: nn.Module = None,
-                 near=2.0, far=6.0, batch_size=4096):
+                 batch_size=4096, near=2.0, far=6.0):
         """Constructor.
 
         Args:
@@ -247,10 +247,6 @@ class RaySamplingDataset(Dataset):
             cameras (List[CameraInfo]): List of all cameras in the scene
             num_samples (int): The number of samples to take per ray
             resolution (int): The ray sampling resolution
-            near (float, optional): Near value to use when performing uniform
-                                    sampling along rays
-            far (float, optional): Far value to use when performing uniform
-                                   sampling along rays
             stratified (bool, optional): Whether to use stratified random
                                          sampling
             opacity_model (nn.Module, optional): Optional model which predicts
@@ -260,6 +256,10 @@ class RaySamplingDataset(Dataset):
                                                  to None.
             batch_size (int, optional): Batch size to use with the opacity
                                         model. Defaults to 4096.
+            near (float, optional): Near value to use when performing uniform
+                                    sampling along rays
+            far (float, optional): Far value to use when performing uniform
+                                   sampling along rays
         """
         assert len(images.shape) == 4
         assert len(images) == len(cameras)
@@ -303,7 +303,7 @@ class RaySamplingDataset(Dataset):
         alphas = []
         crop_index = []
         weights = []
-        bar = ETABar("Adding cameras", max=len(cameras))
+        bar = ETABar("Loading {} data".format(label), max=len(cameras))
         for camera, image in zip(cameras, images):
             bar.next()
             bar.info(camera.name)
@@ -398,9 +398,9 @@ class RaySamplingDataset(Dataset):
                                   self.resolution,
                                   stratified,
                                   self.opacity_model,
+                                  self.batch_size,
                                   self.near,
-                                  self.far,
-                                  self.batch_size)
+                                  self.far)
 
     def sample_cameras(self, num_cameras: int,
                        stratified=False) -> "RaySamplingDataset":
@@ -477,8 +477,9 @@ class RaySamplingDataset(Dataset):
         t_values = t_values.reshape(1, num_samples)
         if self.stratified:
             scale = (self.far - self.near) / num_samples
-            permute = torch.random.uniform(size=(num_rays, self.num_samples))
-            permute = (permute * scale).astype(np.float32)
+            permute = torch.rand((num_rays, num_samples),
+                                 dtype=torch.float32)
+            permute = permute * scale
             t_values = t_values + permute
         else:
             t_values = t_values.expand(num_rays, -1)
@@ -535,7 +536,7 @@ class RaySamplingDataset(Dataset):
     def load(path: str, split: str, resolution: int,
              num_samples: int, stratified: bool,
              opacity_model: nn.Module = None,
-             near=2.0, far=6.0, batch_size=4096) -> "RaySamplingDataset":
+             batch_size=4096, near=2.0, far=6.0) -> "RaySamplingDataset":
         """Loads a dataset from an NPZ file.
 
         Description:
@@ -558,10 +559,10 @@ class RaySamplingDataset(Dataset):
                                                  predicts more than one value,
                                                  the last channel is used.
                                                  Defaults to None.
-            near (float, optional): the near t-value. Defaults to 2.0.
-            far (float, optional): the far t-value. Defaults to 6.0.
             batch_size (int, optional): Batch size to use when sampling the
                                         opacity model.
+            near (float, optional): the near t-value. Defaults to 2.0.
+            far (float, optional): the far t-value. Defaults to 6.0.
 
         Returns:
             RaySamplingDataset: A dataset made from the camera and image data
@@ -592,7 +593,7 @@ class RaySamplingDataset(Dataset):
                                                         extrinsics))]
         return RaySamplingDataset(split, images, cameras, num_samples,
                                   resolution, stratified, opacity_model,
-                                  near, far, batch_size)
+                                  batch_size, near, far)
 
     def to_scenepic(self) -> sp.Scene:
         """Creates a ray sampling visualization ScenePic for the dataset."""

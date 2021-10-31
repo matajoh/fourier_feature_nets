@@ -14,10 +14,8 @@ def _parse_args():
     parser.add_argument("nerf_model", choices=["mlp", "basic",
                                                "positional", "gaussian"])
     parser.add_argument("results_dir", help="Path to output results")
-    parser.add_argument("--voxels-dir",
-                        help="Path to the voxels directory")
-    parser.add_argument("--path-length", type=int, default=128,
-                        help="Number of voxels to intersect")
+    parser.add_argument("--opacity-model",
+                        help="Path to the opacity model")
     parser.add_argument("--num-samples", type=int, default=128,
                         help="Number of samples to take")
     parser.add_argument("--resolution", type=int, default=400,
@@ -74,12 +72,22 @@ def _main():
                 print("Unable to download dataset", dataset_name)
                 return 1
 
+    if args.opacity_model:
+        opacity_model = nerf.load_model(args.opacity_model)
+        opacity_model = opacity_model.to("cuda")
+    else:
+        opacity_model = None
+
     train_dataset = nerf.RaySamplingDataset.load(data_path, "train",
                                                  args.resolution,
-                                                 args.num_samples, True)
+                                                 args.num_samples, True,
+                                                 opacity_model,
+                                                 args.batch_size)
     val_dataset = nerf.RaySamplingDataset.load(data_path, "val",
                                                args.resolution,
-                                               args.num_samples, False)
+                                               args.num_samples, False,
+                                               opacity_model,
+                                               args.batch_size)
 
     raycaster = nerf.Raycaster(model)
     raycaster.to("cuda")
