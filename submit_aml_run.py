@@ -1,3 +1,5 @@
+"""Script which submits other scripts to be run in Azure Machine Learning."""
+
 import argparse
 import os
 

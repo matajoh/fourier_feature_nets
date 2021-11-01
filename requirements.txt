@@ -1,3 +1,4 @@
+wheel
 scenepic
 numba
 numpy
@@ -7,3 +8,4 @@ matplotlib
 trimesh
 nbstripout
 requests
+progress

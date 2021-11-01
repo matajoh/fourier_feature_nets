@@ -1,6 +1,8 @@
+"""Module implementing a differentiable volumetric raycaster."""
+
 import os
-import sys
 import time
+from typing import NamedTuple
 
 import cv2
 from matplotlib.pyplot import get_cmap
@@ -17,54 +19,75 @@ except ImportError:
     print("Unable to import AzureML, running as local experiment")
 
 from .datasets import RaySamples, RaySamplingDataset
+from .utils import calculate_blend_weights, ETABar
+
+
+RenderResult = NamedTuple("RenderResult", [("color", torch.Tensor),
+                                           ("alpha", torch.Tensor),
+                                           ("depth", torch.Tensor)])
+LogEntry = NamedTuple("LogEntry", [("step", int), ("timestamp", float),
+                                   ("train_psnr", float), ("val_psnr", float)])
 
 
 class Raycaster(nn.Module):
-    def __init__(self, train_dataset: RaySamplingDataset,
-                 val_dataset: RaySamplingDataset,
-                 model: nn.Module, results_dir: str):
+    """Implementation of a volumetric raycaster."""
+
+    def __init__(self, model: nn.Module, use_view=False):
+        """Constructor.
+
+        Args:
+            model (nn.Module): The model used to predict color and opacity.
+            use_view (bool, optional): Whether to pass view information to
+                                       the model. Defaults to False.
+        """
         nn.Module.__init__(self)
         self.model = model
-        self.train_dataset = train_dataset
-        self.val_dataset = val_dataset
-        self.trainval_dataset = train_dataset.subset(len(val_dataset), True)
-        self._results_dir = results_dir
-        self._val_index = 0
-        self._use_alpha = train_dataset.alphas is not None
+        self._use_alpha = False
+        self._use_view = use_view
 
-        if Run:
-            self.run = Run.get_context()
-        else:
-            self.run = None
+    def render(self, ray_samples: RaySamples,
+               include_depth=False) -> RenderResult:
+        """Render the ray samples.
 
-        if not os.path.exists(results_dir):
-            os.makedirs(results_dir)
+        Args:
+            ray_samples (RaySamples): The ray samples to render.
+            include_depth (bool, optional): Whether to render depth.
+                                            Defaults to False.
 
-    def render(self, ray_samples: RaySamples) -> torch.Tensor:
-        num_rays, num_samples = ray_samples.deltas.shape[:2]
+        Returns:
+            RenderResult: The per-ray rendering result.
+        """
+        num_rays, num_samples = ray_samples.positions.shape[:2]
         positions = ray_samples.positions.reshape(-1, 3)
-        color_o = self.model(positions)
+        if self._use_view:
+            views = ray_samples.view_directions.reshape(-1, 3)
+            color_o = self.model(positions, views)
+        else:
+            color_o = self.model(positions)
+
         color_o = color_o.reshape(num_rays, num_samples, 4)
         color, opacity = torch.split(color_o, [3, 1], -1)
         color = torch.sigmoid(color)
         opacity = F.softplus(opacity)
 
-        alpha = 1 - torch.exp(-(opacity * ray_samples.deltas))
-        ones = torch.ones_like(alpha)
+        opacity = opacity.squeeze(-1)
+        weights = calculate_blend_weights(ray_samples.t_values, opacity)
 
-        trans = torch.minimum(ones, 1 - alpha + 1e-10)
-        trans, _ = trans.split([num_samples - 1, 1], dim=-2)
-        trans = torch.cat([torch.ones_like(trans[:, :1, :]), trans], dim=-2)
-        weights = alpha * torch.cumprod(trans, -2)
-        output_color = weights * color
+        output_color = weights.unsqueeze(-1) * color
         output_color = output_color.sum(-2)
 
-        with torch.no_grad():
-            output_depth = weights.squeeze(-1) * ray_samples.t_values
-            output_depth = output_depth.sum(-1)
+        weights = weights[:, :-1]
+        output_alpha = weights.sum(-1)
 
-        output_alpha = weights.squeeze(-1).sum(-1)
-        return output_color, output_alpha, output_depth
+        if include_depth:
+            cutoff = weights.argmax(-1)
+            cutoff[output_alpha < .1] = -1
+            output_depth = ray_samples.t_values[torch.arange(num_rays),
+                                                cutoff]
+        else:
+            output_depth = None
+
+        return RenderResult(output_color, output_alpha, output_depth)
 
     def _loss(self, ray_samples: RaySamples) -> torch.Tensor:
         device = next(self.model.parameters()).device
@@ -76,16 +99,14 @@ class Raycaster(nn.Module):
 
         return loss
 
-    def _render_eval_image(self, step: int, batch_size: int, split: str):
+    def _render_eval_image(self, dataset: RaySamplingDataset, step: int,
+                           batch_size: int, results_dir: str,
+                           index: int):
         with torch.no_grad():
+            index = index % dataset.num_cameras
             device = next(self.model.parameters()).device
-            dataset = self.val_dataset if split == "val" else self.trainval_dataset
             resolution = dataset.resolution
             num_rays = resolution * resolution
-            if self._val_index * num_rays >= len(dataset):
-                self._val_index = 0
-
-            index = self._val_index
             image_start = index * num_rays
             image_end = image_start + num_rays
             predicted = []
@@ -99,7 +120,7 @@ class Raycaster(nn.Module):
                 idx = list(range(start, end))
                 ray_samples = dataset[idx]
                 ray_samples = ray_samples.to(device)
-                pred_colors, pred_alphas, pred_depth = self.render(ray_samples)
+                pred_colors, pred_alphas, pred_depth = self.render(ray_samples, True)
                 pred_colors = pred_colors.cpu().numpy()
                 act_colors = ray_samples.colors.cpu().numpy()
                 pred_error = np.square(act_colors - pred_colors).sum(-1) / 3
@@ -139,7 +160,7 @@ class Raycaster(nn.Module):
             error = (error * 255).astype(np.uint8)
 
             name = "s{:07}_c{:03}.png".format(step, index)
-            image_dir = os.path.join(self._results_dir, split)
+            image_dir = os.path.join(results_dir, dataset.label)
             if not os.path.exists(image_dir):
                 os.makedirs(image_dir)
 
@@ -153,17 +174,51 @@ class Raycaster(nn.Module):
             cv2.imwrite(image_path, compare[:, :, ::-1])
             return psnr
 
-    def fit(self, batch_size: int, learning_rate: float, num_steps: int,
-            reporting_interval: int, crop_epochs: int):
+    def fit(self, train_dataset: RaySamplingDataset,
+            val_dataset: RaySamplingDataset,
+            results_dir: str,
+            batch_size: int,
+            learning_rate: float,
+            num_steps: int,
+            reporting_interval: int,
+            crop_epochs: int):
+        """Fits the volumetric model using the raycaster.
+
+        Args:
+            train_dataset (RaySamplingDataset): The train dataset.
+            val_dataset (RaySamplingDataset): The validation dataset.
+            results_dir (str): The output directory for results images.
+            batch_size (int): The ray batch size.
+            learning_rate (float): Learning rate for the model.
+            num_steps (int): Number of steps (i.e. batches) to use for training.
+            reporting_interval (int): Number of steps between logging and images
+            crop_epochs (int): Number of epochs to use center-cropped data at
+                               the beginning of training.
+
+        Returns:
+            List[LogEntry]: logging information from the training run
+        """
+        if Run:
+            run = Run.get_context()
+        else:
+            run = None
+
+        if not os.path.exists(results_dir):
+            os.makedirs(results_dir)
+
+        self._use_alpha = train_dataset.alphas is not None
+        trainval_dataset = train_dataset.sample_cameras(val_dataset.num_cameras)
+
         optim = torch.optim.Adam(self.model.parameters(), learning_rate)
         step = 0
         start_time = time.time()
         timestamp = start_time
         log = []
         epoch = 0
+        render_index = 0
         while step < num_steps:
-            self.train_dataset.center_crop = epoch < crop_epochs
-            num_rays = len(self.train_dataset)
+            train_dataset.center_crop = epoch < crop_epochs
+            num_rays = len(train_dataset)
             print("Epoch", epoch,
                   " -- center_crop:", epoch < crop_epochs,
                   "num_rays:", num_rays)
@@ -176,15 +231,19 @@ class Raycaster(nn.Module):
 
                 end = min(start + batch_size, num_rays)
                 batch = index[start:end].tolist()
-                ray_samples = self.train_dataset[batch]
+                ray_samples = train_dataset[batch]
                 optim.zero_grad()
                 loss = self._loss(ray_samples)
                 loss.backward()
                 optim.step()
 
                 if step % reporting_interval == 0:
-                    val_psnr = self._render_eval_image(step, batch_size, "val")
-                    train_psnr = self._render_eval_image(step, batch_size, "train")
+                    val_psnr = self._render_eval_image(val_dataset, step,
+                                                       4 * batch_size,
+                                                       results_dir, render_index)
+                    train_psnr = self._render_eval_image(trainval_dataset, step,
+                                                         4 * batch_size,
+                                                         results_dir, render_index)
                     current_time = time.time()
                     time_per_step = (current_time - timestamp) / reporting_interval
                     timestamp = current_time
@@ -194,14 +253,15 @@ class Raycaster(nn.Module):
                           "loss_train: {:2f}".format(loss.item()),
                           "val_psnr: {:2f}".format(val_psnr))
 
-                    if self.run:
-                        self.run.log("psnr_train", train_psnr)
-                        self.run.log("loss_train", loss.item())
-                        self.run.log("psnr_val", val_psnr)
-                        self.run.log("time_per_step", time_per_step)
+                    if run:
+                        run.log("psnr_train", train_psnr)
+                        run.log("loss_train", loss.item())
+                        run.log("psnr_val", val_psnr)
+                        run.log("time_per_step", time_per_step)
 
-                    log.append((step, timestamp - start_time, train_psnr, val_psnr))
-                    self._val_index += 1
+                    log.append(LogEntry(step, timestamp - start_time,
+                                        train_psnr, val_psnr))
+                    render_index += 1
 
                 step += 1
 
@@ -209,10 +269,29 @@ class Raycaster(nn.Module):
 
         return log
 
-    def to_scenepic(self, num_cameras=10,
-                    resolution=50, num_samples=64) -> sp.Scene:
-        dataset = RaySamplingDataset(self.val_dataset.images[:num_cameras],
-                                     self.val_dataset.cameras[:num_cameras],
+    def to_scenepic(self, dataset: RaySamplingDataset, num_cameras=10,
+                    resolution=50, num_samples=64,
+                    empty_threshold=0.1) -> sp.Scene:
+        """Creates a scenepic displaying the state of the volumetric model.
+
+        Args:
+            dataset (RaySamplingDataset): The dataset to use for visualization.
+            num_cameras (int, optional): Number of cameras to show.
+                                         Defaults to 10.
+            resolution (int, optional): Resolution to use for ray sampling.
+                                        Defaults to 50.
+            num_samples (int, optional): Number of samples per ray.
+                                         Defaults to 64.
+            empty_threshold (float, optional): Opacity threshold to determine if
+                                               a sample is "empty".
+                                               Defaults to 0.1.
+
+        Returns:
+            sp.Scene: The constructed scenepic
+        """
+        dataset = RaySamplingDataset("scenepic",
+                                     dataset.images[:num_cameras],
+                                     dataset.cameras[:num_cameras],
                                      num_samples,
                                      resolution)
 
@@ -225,11 +304,10 @@ class Raycaster(nn.Module):
         cmap = get_cmap("jet")
         camera_colors = cmap(np.linspace(0, 1, len(dataset.cameras)))[:, :3]
         image_meshes = []
-        sys.stdout.write("Adding cameras")
+        bar = ETABar("Adding cameras", max=dataset.num_cameras)
         for pixels, camera, color in zip(dataset.images, dataset.cameras,
                                          camera_colors):
-            sys.stdout.write(".")
-            sys.stdout.flush()
+            bar.next()
             camera = camera.to_scenepic()
 
             image = scene.create_image()
@@ -242,14 +320,13 @@ class Raycaster(nn.Module):
 
             frustums.add_camera_frustum(camera, color, depth=0.5, thickness=0.01)
 
-        print("done.")
+        bar.finish()
 
-        sys.stdout.write("Sampling rays...")
+        bar = ETABar("Sampling rays", max=dataset.num_cameras)
         num_rays = dataset.resolution ** 2
         device = next(self.model.parameters()).device
         for i, camera in enumerate(dataset.cameras):
-            sys.stdout.write(".")
-            sys.stdout.flush()
+            bar.next()
             start = i * num_rays
             end = start + num_rays
             index = [i for i in range(start, end)]
@@ -257,7 +334,13 @@ class Raycaster(nn.Module):
             ray_samples = ray_samples.to(device)
 
             with torch.no_grad():
-                color_o = self.model(ray_samples.positions)
+                positions = ray_samples.positions.reshape(-1, 3)
+                if self._use_view:
+                    views = ray_samples.view_directions.reshape(-1, 3)
+                    color_o = self.model(positions, views)
+                else:
+                    color_o = self.model(positions)
+
                 color_o = color_o.reshape(num_rays, num_samples, 4)
                 color, opacity = torch.split(color_o, [3, 1], -1)
                 color = torch.sigmoid(color)
@@ -267,7 +350,7 @@ class Raycaster(nn.Module):
             color = color.cpu().numpy().reshape(-1, 3)
             opacity = opacity.reshape(-1).cpu().numpy()
 
-            empty = opacity < 1e-5
+            empty = opacity < empty_threshold
             not_empty = np.logical_not(empty)
 
             samples = scene.create_mesh()
@@ -288,7 +371,7 @@ class Raycaster(nn.Module):
             for mesh in image_meshes:
                 frame.add_mesh(mesh)
 
-        print("done.")
+        bar.finish()
 
         scene.framerate = 10
         return scene

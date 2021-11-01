@@ -1,30 +1,36 @@
 """Module created for [my NeRF lecture]."""
 
 from .camera_info import CameraInfo
-from .datasets import PixelDataset, RaySamples, RaySamplingDataset, VoxelDataset
+from .datasets import PixelDataset, RaySamples, RaySamplingDataset
 from .models import (
     BasicFourierMLP,
     GaussianFourierMLP,
+    FourierFeatureMLP,
     MLP,
-    PositionalFourierMLP
+    NeRF,
+    PositionalFourierMLP,
+    Voxels,
+    load_model
 )
 from .octree import OcTree
 from .raycaster import Raycaster
 from .triangulation import Triangulation
-from .volume_carving import VolumeCarver
+from .utils import ETABar
 
 __all__ = ["CameraInfo",
            "CameraTransform",
+           "ETABar",
            "MLP",
+           "NeRF",
            "BasicFourierMLP",
+           "FourierFeatureMLP",
            "PositionalFourierMLP",
            "GaussianFourierMLP",
-           "FastOcTree",
+           "Voxels",
+           "load_model",
            "OcTree",
            "PixelDataset",
-           "VoxelDataset",
            "Raycaster",
            "RaySamples",
            "RaySamplingDataset",
-           "Triangulation",
-           "VolumeCarver"]
+           "Triangulation"]
