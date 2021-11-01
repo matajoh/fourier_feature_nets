@@ -1,14 +1,13 @@
 """Module providing dataset classes for use in training NeRF models."""
 
-import base64
 from collections import namedtuple
 import math
+import os
 from typing import List, NamedTuple, Union
 
 import cv2
 from matplotlib.pyplot import get_cmap
 import numpy as np
-import requests
 import scenepic as sp
 import torch
 import torch.nn as nn
@@ -16,20 +15,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from .camera_info import CameraInfo
-from .utils import calculate_blend_weights, ETABar
-
-
-DATASET_URLS = {
-    "antinous_400": "https://1drv.ms/u/s!AnWvK2b51nGqluBagOAnmTej7LJb_Q",
-    "lego_400": "https://1drv.ms/u/s!AnWvK2b51nGqluBbbdxzOG5q4a98yA"
-}
-
-
-def _create_onedrive_directdownload(onedrive_link: str):
-    data_bytes64 = base64.b64encode(bytes(onedrive_link, "utf-8"))
-    data_bytes64 = data_bytes64.decode("utf-8")
-    data_bytes64 = data_bytes64.replace("/", "_").replace("+", "-").rstrip("=")
-    return f"https://api.onedrive.com/v1.0/shares/u!{data_bytes64}/root/content"
+from .utils import calculate_blend_weights, download_asset, ETABar
 
 
 class PixelData(namedtuple("PixelData", ["uv", "color"])):
@@ -78,6 +64,11 @@ class PixelDataset:
         Returns:
             PixelDataset: the constructed dataset
         """
+        if not os.path.exists(path):
+            data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+            path = os.path.join(data_dir, path)
+            path = os.path.abspath(path)
+
         pixels = cv2.imread(path)
         if pixels is None:
             print("Unable to load image at", path)
@@ -93,7 +84,7 @@ class PixelDataset:
             pixels = pixels[:, start:end]
 
         if pixels.shape[0] != size:
-            sigma = pixels.shape[0] / size
+            sigma = 0.5 * pixels.shape[0] / size
             pixels = cv2.GaussianBlur(pixels, (0, 0), sigma)
             pixels = cv2.resize(pixels, (size, size), cv2.INTER_NEAREST)
 
@@ -109,9 +100,9 @@ class PixelDataset:
         val_uv = []
         val_color = []
         for row in range(size):
-            u = (2 * (row + 0.5) / size) - 1
+            u = (row + 0.5) / size
             for col in range(size):
-                v = (2 * (col + 0.5) / size) - 1
+                v = (col + 0.5) / size
                 color = pixels[row, col].tolist()
                 val_uv.append((u, v))
                 val_color.append(color)
@@ -165,13 +156,8 @@ class PixelDataset:
         Returns:
             torch.Tensor: The image UVs
         """
-        uvs = []
-        for row in range(size):
-            u = (2 * (row + 0.5) / size) - 1
-            for col in range(size):
-                v = (2 * (col + 0.5) / size) - 1
-                uvs.append((u, v))
-
+        vals = np.linspace(0, 1, size)
+        uvs = np.stack(np.meshgrid(vals, vals, indexing="ij"), -1)
         return torch.FloatTensor(uvs).to(device=device)
 
     def psnr(self, colors: torch.Tensor) -> float:
@@ -187,13 +173,15 @@ class PixelDataset:
         return -10 * math.log10(mse)
 
 
-def _determine_weights(t_values: torch.Tensor,
-                       opacity: torch.Tensor) -> torch.Tensor:
+def _determine_cdf(t_values: torch.Tensor,
+                   opacity: torch.Tensor) -> torch.Tensor:
     weights = calculate_blend_weights(t_values, opacity)
-    weights = weights[:, :-1]
-    weights = weights.cumsum(-1)
-    weights = weights / weights[:, -1:]
-    return weights
+    weights = weights[:, 1:-1]
+    weights += 1e-5
+    cdf = weights.cumsum(-1)
+    cdf = cdf / cdf[:, -1:]
+    cdf = torch.cat([torch.zeros_like(cdf[:, :1]), cdf], dim=-1)
+    return cdf
 
 
 class RaySamples(NamedTuple("RaySamples", [("positions", torch.Tensor),
@@ -302,7 +290,7 @@ class RaySamplingDataset(Dataset):
         colors = []
         alphas = []
         crop_index = []
-        weights = []
+        cdfs = []
         bar = ETABar("Loading {} data".format(label), max=len(cameras))
         for camera, image in zip(cameras, images):
             bar.next()
@@ -326,7 +314,7 @@ class RaySamplingDataset(Dataset):
                 t_values = t_values.unsqueeze(0).expand(len(cam_starts), -1)
                 opacity = self._determine_opacity(t_values, cam_starts,
                                                   cam_directions)
-                weights.append(_determine_weights(t_values, opacity))
+                cdfs.append(_determine_cdf(t_values, opacity))
 
         bar.finish()
 
@@ -342,7 +330,7 @@ class RaySamplingDataset(Dataset):
         self.colors = torch.cat(colors)
 
         if self.focus_sampling:
-            self.weights = torch.cat(weights)
+            self.cdfs = torch.cat(cdfs)
 
     def _determine_opacity(self, t_values: torch.Tensor,
                            starts: torch.Tensor,
@@ -380,13 +368,17 @@ class RaySamplingDataset(Dataset):
         return len(self.cameras)
 
     def subset(self, cameras: List[int],
-               stratified=False) -> "RaySamplingDataset":
+               num_samples: int,
+               resolution: int,
+               stratified: bool) -> "RaySamplingDataset":
         """Returns a subset of this dataset (by camera).
 
         Args:
             cameras (List[int]): List of camera indices
-            stratified (bool, optional): Whether to use stratified sampling.
-                                         Defaults to False.
+            num_samples (int): Number of samples per ray.
+            resolution (int): Ray sampling resolution
+            stratified (bool): Whether to use stratified sampling.
+                               Defaults to False.
 
         Returns:
             RaySamplingDataset: New dataset with the subset of cameras
@@ -394,8 +386,8 @@ class RaySamplingDataset(Dataset):
         return RaySamplingDataset(self.label,
                                   self.images[cameras],
                                   [self.cameras[i] for i in cameras],
-                                  self.num_samples,
-                                  self.resolution,
+                                  num_samples,
+                                  resolution,
                                   stratified,
                                   self.opacity_model,
                                   self.batch_size,
@@ -403,7 +395,9 @@ class RaySamplingDataset(Dataset):
                                   self.far)
 
     def sample_cameras(self, num_cameras: int,
-                       stratified=False) -> "RaySamplingDataset":
+                       num_samples: int,
+                       resolution: int,
+                       stratified: bool) -> "RaySamplingDataset":
         """Samples cameras from the dataset and returns the subset.
 
         Description:
@@ -411,8 +405,9 @@ class RaySamplingDataset(Dataset):
 
         Args:
             num_cameras (int): Number of cameras to sample.
-            stratified (bool, optional): Whether to use stratified sampling
-                                         in the new dataset.. Defaults to False.
+            num_samples (int): Number of samples per ray.
+            resolution (int): Ray sampling resolution
+            stratified (bool): Whether to use stratified sampling
 
         Returns:
             RaySamplingDataset: a subset of the dataset with the sampled cameras
@@ -429,26 +424,42 @@ class RaySamplingDataset(Dataset):
             choice = unchosen[distances.argmax()]
             samples.add(choice)
 
-        return self.subset(list(samples), stratified)
+        return self.subset(list(samples), num_samples, resolution, stratified)
 
     def _sample_t_values(self, idx: List[int], num_samples: int) -> torch.Tensor:
         num_rays = len(idx)
 
         t_values = torch.linspace(self.near, self.far, num_samples)
+        t_values = 0.5 * (t_values[..., :-1] + t_values[..., 1:])
         t_values = t_values.unsqueeze(0).expand(num_rays, -1)
-        t_starts = t_values[:, :-1]
-        t_ends = t_values[:, 1:]
 
-        samples = torch.rand((num_rays, num_samples), dtype=torch.float32)
-        indices = torch.searchsorted(self.weights[idx], samples)
-        samples = torch.rand((num_rays, num_samples), dtype=torch.float32)
+        if self.stratified:
+            samples = torch.rand((num_rays, num_samples), dtype=torch.float32)
+        else:
+            samples = torch.linspace(0., 1., num_samples)
+            samples = samples.unsqueeze(0).repeat(num_rays, 1)
 
-        t_starts = torch.gather(t_starts, 1, indices)
-        t_ends = torch.gather(t_ends, 1, indices)
-        t_scale = t_ends - t_starts
-        t_values = t_starts + t_scale * samples
+        cdf = self.cdfs[idx]
+        index = torch.searchsorted(cdf, samples, right=True)
+        index_below = torch.maximum(torch.zeros_like(index), index - 1)
+        index_above = torch.minimum(torch.full_like(index, cdf.shape[-1] - 1),
+                                    index)
+        index_ba = torch.cat([index_below, index_above], -1)
 
-        return t_values
+        cdf_ba = torch.gather(cdf, 1, index_ba)
+        cdf_ba = cdf_ba.reshape(num_rays, 2, num_samples)
+        t_values_ba = torch.gather(t_values, 1, index_ba)
+        t_values_ba = t_values_ba.reshape(num_rays, 2, num_samples)
+
+        denominator = cdf_ba[:, 1] - cdf_ba[:, 0]
+        denominator = torch.where(denominator < 1e-5,
+                                  torch.ones_like(denominator),
+                                  denominator)
+        t_diff = (samples - cdf_ba[:, 0]) / denominator
+        t_scale = t_values_ba[:, 1] - t_values_ba[:, 0]
+        samples = t_values_ba[:, 0] + t_diff * t_scale
+
+        return samples
 
     def __getitem__(self, idx: Union[List[int], torch.Tensor]) -> RaySamples:
         """Returns the requested sampled rays."""
@@ -456,7 +467,7 @@ class RaySamplingDataset(Dataset):
             idx = idx.tolist()
 
         if self.center_crop:
-            idx = [int(self.crop_index[i]) for i in idx]
+            idx = self.crop_index[idx].tolist()
 
         if isinstance(idx, list):
             num_rays = len(idx)
@@ -504,35 +515,6 @@ class RaySamplingDataset(Dataset):
         return RaySamples(positions, directions, colors, alphas, t_values)
 
     @staticmethod
-    def download(name: str, output_path: str) -> bool:
-        """Downloads one of the known datasets.
-
-        Args:
-            name (str): Either "lego_400" or "antinous_400"
-            output_path (str): Path to the downloaded NPZ
-
-        Returns:
-            bool: whether the download was successful
-        """
-        if name not in DATASET_URLS:
-            print("Unrecognized dataset:", name)
-            return False
-
-        print("Downloading", name, "to", output_path)
-        url = _create_onedrive_directdownload(DATASET_URLS[name])
-        res = requests.get(url, stream=True)
-        total_bytes = int(res.headers.get("content-length"))
-        bar = ETABar("Downloading", max=total_bytes)
-        with open(output_path, "wb") as file:
-            for chunk in res.iter_content(chunk_size=1024):
-                if chunk:
-                    bar.next(len(chunk))
-                    file.write(chunk)
-
-        bar.finish()
-        return True
-
-    @staticmethod
     def load(path: str, split: str, resolution: int,
              num_samples: int, stratified: bool,
              opacity_model: nn.Module = None,
@@ -567,6 +549,17 @@ class RaySamplingDataset(Dataset):
         Returns:
             RaySamplingDataset: A dataset made from the camera and image data
         """
+        if not os.path.exists(path):
+            path = os.path.join(os.path.dirname(__file__), "..", "data", path)
+            path = os.path.abspath(path)
+            if not os.path.exists(path):
+                print("Downloading dataset...")
+                dataset_name = os.path.basename(path)
+                success = download_asset(dataset_name, path)
+                if not success:
+                    print("Unable to download dataset", dataset_name)
+                    return None
+
         data = np.load(path)
         test_end, height, width = data["images"].shape[:3]
         split_counts = data["split_counts"]
@@ -581,6 +574,7 @@ class RaySamplingDataset(Dataset):
             idx = list(range(val_end, test_end))
         else:
             print("Unrecognized split:", split)
+            return None
 
         images = data["images"][idx]
         intrinsics = data["intrinsics"][idx]

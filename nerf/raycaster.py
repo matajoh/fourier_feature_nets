@@ -92,6 +92,7 @@ class Raycaster(nn.Module):
     def _loss(self, ray_samples: RaySamples) -> torch.Tensor:
         device = next(self.model.parameters()).device
         ray_samples = ray_samples.to(device)
+
         colors, alphas, _ = self.render(ray_samples)
         loss = (colors - ray_samples.colors).square().mean()
         if self._use_alpha:
@@ -207,7 +208,10 @@ class Raycaster(nn.Module):
             os.makedirs(results_dir)
 
         self._use_alpha = train_dataset.alphas is not None
-        trainval_dataset = train_dataset.sample_cameras(val_dataset.num_cameras)
+        trainval_dataset = train_dataset.sample_cameras(val_dataset.num_cameras,
+                                                        val_dataset.num_samples,
+                                                        val_dataset.resolution,
+                                                        False)
 
         optim = torch.optim.Adam(self.model.parameters(), learning_rate)
         step = 0
@@ -289,11 +293,8 @@ class Raycaster(nn.Module):
         Returns:
             sp.Scene: The constructed scenepic
         """
-        dataset = RaySamplingDataset("scenepic",
-                                     dataset.images[:num_cameras],
-                                     dataset.cameras[:num_cameras],
-                                     num_samples,
-                                     resolution)
+        dataset = dataset.sample_cameras(num_cameras, num_samples,
+                                         resolution, False)
 
         scene = sp.Scene()
         frustums = scene.create_mesh("frustums", layer_id="frustums")

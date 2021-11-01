@@ -20,8 +20,6 @@ def _parse_args():
                         help="Number of samples to take")
     parser.add_argument("--resolution", type=int, default=400,
                         help="Ray sampling resolution")
-    parser.add_argument("--num-cameras", type=int, default=100,
-                        help="Number of cameras")
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--learning-rate", type=float, default=5e-4)
     parser.add_argument("--num-channels", type=int, default=256,
@@ -62,32 +60,28 @@ def _main():
                                         num_channels=args.num_channels,
                                         num_frequencies=args.num_frequencies)
 
-    data_path = args.data_path
-    if not os.path.exists(data_path):
-        data_path = os.path.join(os.path.dirname(__file__), "data", data_path)
-        if not os.path.exists(data_path):
-            dataset_name = os.path.basename(data_path)[:-4]
-            success = nerf.RaySamplingDataset.download(dataset_name, data_path)
-            if not success:
-                print("Unable to download dataset", dataset_name)
-                return 1
-
     if args.opacity_model:
         opacity_model = nerf.load_model(args.opacity_model)
+        if opacity_model is None:
+            return 1
+
         opacity_model = opacity_model.to("cuda")
     else:
         opacity_model = None
 
-    train_dataset = nerf.RaySamplingDataset.load(data_path, "train",
+    train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
                                                  args.resolution,
                                                  args.num_samples, True,
                                                  opacity_model,
                                                  args.batch_size)
-    val_dataset = nerf.RaySamplingDataset.load(data_path, "val",
+    val_dataset = nerf.RaySamplingDataset.load(args.data_path, "val",
                                                args.resolution,
                                                args.num_samples, False,
                                                opacity_model,
                                                args.batch_size)
+
+    if train_dataset is None:
+        return 1
 
     raycaster = nerf.Raycaster(model)
     raycaster.to("cuda")

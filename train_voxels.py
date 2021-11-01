@@ -15,7 +15,7 @@ def _parse_args():
     parser.add_argument("results_dir", help="Path to output results")
     parser.add_argument("--scale", type=float, default=2,
                         help="Scale of the volume")
-    parser.add_argument("--num-samples", type=int, default=128,
+    parser.add_argument("--num-samples", type=int, default=256,
                         help="Number of samples to take")
     parser.add_argument("--resolution", type=int, default=400,
                         help="Ray sampling resolution")
@@ -23,7 +23,7 @@ def _parse_args():
                         help="Number of cameras")
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--learning-rate", type=float, default=0.01)
-    parser.add_argument("--num-steps", type=int, default=40000,
+    parser.add_argument("--num-steps", type=int, default=10000,
                         help="Number of steps to use for training.")
     parser.add_argument("--report-interval", type=int, default=1000,
                         help="Reporting interval for validation/logging")
@@ -39,24 +39,17 @@ def _main():
 
     torch.manual_seed(args.seed)
 
-    data_path = args.data_path
-    if not os.path.exists(data_path):
-        data_path = os.path.join(os.path.dirname(__file__), "data", data_path)
-        if not os.path.exists(data_path):
-            dataset_name = os.path.basename(data_path)[:-4]
-            success = nerf.RaySamplingDataset.download(dataset_name, data_path)
-            if not success:
-                print("Unable to download dataset", dataset_name)
-                return 1
-
     model = nerf.Voxels(args.side, args.scale)
 
-    train_dataset = nerf.RaySamplingDataset.load(data_path, "train",
+    train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
                                                  args.resolution,
                                                  args.num_samples, True)
-    val_dataset = nerf.RaySamplingDataset.load(data_path, "val",
+    val_dataset = nerf.RaySamplingDataset.load(args.data_path, "val",
                                                args.resolution,
                                                args.num_samples, False)
+
+    if train_dataset is None:
+        return 1
 
     raycaster = nerf.Raycaster(model)
     raycaster.to("cuda")

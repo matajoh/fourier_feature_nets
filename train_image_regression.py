@@ -57,14 +57,7 @@ def _main():
         os.makedirs(args.results_dir)
 
     print("Creating dataset...")
-    image_path = args.image_path
-    if not os.path.exists(image_path):
-        data_dir = os.path.join(os.path.dirname(__file__), "data")
-        image_path = os.path.join(data_dir, image_path)
-        image_path = os.path.abspath(image_path)
-        print("Image not found, also trying", image_path)
-
-    dataset = nerf.PixelDataset.create(image_path,
+    dataset = nerf.PixelDataset.create(args.image_path,
                                        args.color_space,
                                        args.image_size)
     if dataset is None:
@@ -79,23 +72,23 @@ def _main():
     if args.nerf_model == "mlp":
         model = nerf.MLP(2, 3,
                          num_channels=args.num_channels,
-                         output_act=torch.sigmoid)
+                         output_act=True)
     elif args.nerf_model == "basic":
         model = nerf.BasicFourierMLP(2, 3,
                                      num_channels=args.num_channels,
-                                     output_act=torch.sigmoid)
+                                     output_act=True)
     elif args.nerf_model == "positional":
         model = nerf.PositionalFourierMLP(2, 3,
                                           sigma=args.pos_sigma,
                                           num_channels=args.num_channels,
                                           num_frequencies=args.num_frequencies,
-                                          output_act=torch.sigmoid)
+                                          output_act=True)
     elif args.nerf_model == "gaussian":
         model = nerf.GaussianFourierMLP(2, 3,
                                         sigma=args.gauss_sigma,
                                         num_channels=args.num_channels,
                                         num_frequencies=args.num_frequencies,
-                                        output_act=torch.sigmoid)
+                                        output_act=True)
     else:
         raise NotImplementedError("Unsupported model: {}".format(args.nerf_model))
 
@@ -112,7 +105,6 @@ def _main():
                                           "val{:05}.png".format(step))
                 cv2.imwrite(image_path, frame)
                 if run:
-                    run.log_image("val{:05}".format(step), image_path)
                     run.log("psnr", psnr)
 
                 if is_offline:
@@ -139,14 +131,13 @@ def _main():
         image = dataset.to_image(output, args.image_size * 2)
         final_path = os.path.join(args.results_dir, "superres.png")
         cv2.imwrite(final_path, image)
-        if Run is None:
-            cv2.imshow("progress", frame)
-            cv2.imshow("super-resolution", frame)
-            cv2.waitKey()
-        else:
-            run.log_image("val{:05}".format(args.num_steps), image_path)
-            run.log_image("super-resolution", final_path)
+        if run:
             run.log("psnr", psnr)
+
+        if is_offline:
+            cv2.imshow("progress", frame)
+            cv2.imshow("super-resolution", image)
+            cv2.waitKey()
 
     model_path = os.path.join(args.results_dir, "model.pkl")
     model.save(model_path)
