@@ -53,8 +53,8 @@ def calculate_blend_weights(t_values: torch.Tensor,
 
 
 ASSETS = {
-    "antinous_400": "https://1drv.ms/u/s!AnWvK2b51nGqluBagOAnmTej7LJb_Q",
-    "lego_400": "https://1drv.ms/u/s!AnWvK2b51nGqluBbbdxzOG5q4a98yA",
+    "antinous_400.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluBagOAnmTej7LJb_Q",
+    "lego_400.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluBbbdxzOG5q4a98yA",
     "lego_400_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluB7Bf3qx5P3h5V9CQ?e=mEx2A3"
 }
 
