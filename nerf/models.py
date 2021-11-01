@@ -1,12 +1,14 @@
 """Module containing various NeRF formulations."""
 
 import math
+import os
 from typing import Sequence
-from numba.core.errors import UnsupportedError
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from .utils import download_asset
 
 
 class FourierFeatureMLP(nn.Module):
@@ -160,8 +162,9 @@ class PositionalFourierMLP(FourierFeatureMLP):
 
     @staticmethod
     def encoding(sigma: float, num_frequencies: int, num_inputs: int):
-        num_steps = num_frequencies // num_inputs
-        frequencies_matrix = 2 ** torch.linspace(0, sigma * 2 * math.pi, num_steps) - 1
+        exponents = torch.arange(num_frequencies, dtype=torch.float32)
+        exponents /= num_frequencies
+        frequencies_matrix = 2 * math.pi * torch.pow(sigma, exponents)
         frequencies_matrix = frequencies_matrix.reshape(-1, 1, 1)
         frequencies_matrix = torch.eye(num_inputs) * frequencies_matrix
         frequencies_matrix = frequencies_matrix.reshape(-1, num_inputs)
@@ -336,6 +339,21 @@ class Voxels(nn.Module):
 
 
 def load_model(path: str):
+    if not os.path.exists(path):
+        models_dir = os.path.join(os.path.dirname(__file__), "..", "models")
+        if not os.path.exists(models_dir):
+            os.makedirs(models_dir)
+
+        path = os.path.join(models_dir, path)
+        path = os.path.abspath(path)
+        if not os.path.exists(path):
+            print("Downloading model...")
+            model_name = os.path.basename(path)
+            success = download_asset(model_name, path)
+            if not success:
+                print("Unable to download model", model_name)
+                return None
+
     state_dict = torch.load(path)
     if state_dict["type"] == "fourier":
         model_class = FourierFeatureMLP
@@ -344,7 +362,7 @@ def load_model(path: str):
     elif state_dict["type"] == "voxels":
         model_class = Voxels
     else:
-        raise UnsupportedError("Unrecognized model type: " + state_dict["type"])
+        print("Unrecognized model type:", state_dict["type"])
 
     del state_dict["type"]
     model = model_class(**state_dict["params"])

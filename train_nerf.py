@@ -12,10 +12,8 @@ def _parse_args():
     parser = argparse.ArgumentParser("Tiny NeRF")
     parser.add_argument("data_path", help="Path to the data NPZ")
     parser.add_argument("results_dir", help="Path to output results")
-    parser.add_argument("--voxels-dir",
-                        help="Path to the voxels directory")
-    parser.add_argument("--path-length", type=int, default=128,
-                        help="Number of voxels to intersect")
+    parser.add_argument("--opacity-model",
+                        help="Path to the opacity model")
     parser.add_argument("--num-samples", type=int, default=128,
                         help="Number of samples to take")
     parser.add_argument("--resolution", type=int, default=400,
@@ -59,22 +57,26 @@ def _main():
                       args.view_sigma, args.view_freq,
                       [4], not args.omit_inputs)
 
-    data_path = args.data_path
-    if not os.path.exists(data_path):
-        data_path = os.path.join(os.path.dirname(__file__), "data", data_path)
-        if not os.path.exists(data_path):
-            dataset_name = os.path.basename(data_path)[:-4]
-            success = nerf.RaySamplingDataset.download(dataset_name, data_path)
-            if not success:
-                print("Unable to download dataset", dataset_name)
-                return 1
+    if args.opacity_model:
+        opacity_model = nerf.load_model(args.opacity_model)
+        if opacity_model is None:
+            return 1
 
-    train_dataset = nerf.RaySamplingDataset.load(data_path, "train",
+        opacity_model = opacity_model.to("cuda")
+    else:
+        opacity_model = None
+
+    train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
                                                  args.resolution,
-                                                 args.num_samples, True)
-    val_dataset = nerf.RaySamplingDataset.load(data_path, "val",
+                                                 args.num_samples, True,
+                                                 opacity_model, args.batch_size)
+    val_dataset = nerf.RaySamplingDataset.load(args.data_path, "val",
                                                args.resolution,
-                                               args.num_samples, False)
+                                               args.num_samples, False,
+                                               opacity_model, args.batch_size)
+
+    if train_dataset is None:
+        return 1
 
     raycaster = nerf.Raycaster(model, True)
     raycaster.to("cuda")

@@ -134,3 +134,4 @@ dmypy.json
 results
 config.json
 data/*.npz
+models

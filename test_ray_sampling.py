@@ -8,6 +8,7 @@ from nerf import load_model, RaySamplingDataset
 def _parse_args():
     parser = argparse.ArgumentParser("Ray Sampling Tester")
     parser.add_argument("data_path", help="Path to the data NPZ")
+    parser.add_argument("output_path", help="Path to the output scenepic")
     parser.add_argument("--split", default="train",
                         help="Data split to visualize")
     parser.add_argument("--num-samples", type=int, default=32,
@@ -34,18 +35,27 @@ def _main():
 
     if args.opacity_model:
         model = load_model(args.opacity_model)
+        if model is None:
+            return 1
+
         model = model.to("cuda")
     else:
         model = None
 
     dataset = RaySamplingDataset.load(args.data_path, args.split, args.resolution,
                                       args.num_samples, args.stratified, model,
-                                      args.near, args.far, args.batch_size)
+                                      args.batch_size, args.near, args.far)
+    if dataset is None:
+        return 1
+
     if args.num_cameras and args.num_cameras < dataset.num_cameras:
-        dataset = dataset.sample_cameras(args.num_cameras)
+        dataset = dataset.sample_cameras(args.num_cameras,
+                                         args.num_samples,
+                                         args.resolution,
+                                         args.stratified)
 
     scene = dataset.to_scenepic()
-    scene.save_as_html("ray_sampling.html", "Ray Sampling")
+    scene.save_as_html(args.output_path, "Ray Sampling")
 
 
 if __name__ == "__main__":

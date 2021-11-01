@@ -21,7 +21,7 @@ def _parse_args():
                         help="Number of rays to process in a batch")
     parser.add_argument("--min-leaf-size", type=int, default=4,
                         help="Minimum number of samples in a leaf")
-    parser.add_argument("--alpha-threshold", type=float, default=0.5,
+    parser.add_argument("--alpha-threshold", type=float, default=0.3,
                         help="Threshold to use when filtering samples")
     return parser.parse_args()
 
@@ -30,11 +30,20 @@ def _main():
     args = _parse_args()
 
     model = nerf.load_model(args.model_path)
-    dataset = nerf.RaySamplingDataset.load(args.data_path, "train", 400, 128, False)
-    if args.num_cameras < dataset.num_cameras:
-        dataset = dataset.sample_cameras(args.num_cameras)
+    if model is None:
+        return 1
 
-    raycaster = nerf.Raycaster(model)
+    dataset = nerf.RaySamplingDataset.load(args.data_path, "train", 400, 128, False)
+    if dataset is None:
+        return 1
+
+    if args.num_cameras < dataset.num_cameras:
+        dataset = dataset.sample_cameras(args.num_cameras,
+                                         dataset.num_samples,
+                                         dataset.resolution,
+                                         False)
+
+    raycaster = nerf.Raycaster(model, isinstance(model, nerf.NeRF))
     raycaster.to("cuda")
     num_rays = len(dataset)
     colors = []
