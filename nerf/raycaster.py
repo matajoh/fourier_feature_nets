@@ -241,7 +241,7 @@ class Raycaster(nn.Module):
                 loss.backward()
                 optim.step()
 
-                if step % reporting_interval == 0:
+                if step and step % reporting_interval == 0:
                     val_psnr = self._render_eval_image(val_dataset, step,
                                                        4 * batch_size,
                                                        results_dir, render_index)
@@ -250,12 +250,16 @@ class Raycaster(nn.Module):
                                                          results_dir, render_index)
                     current_time = time.time()
                     time_per_step = (current_time - timestamp) / reporting_interval
+                    remaining_time = (num_steps - step) * time_per_step
+                    eta = time.gmtime(current_time + remaining_time)
+                    eta = time.strftime("%a, %d %b %Y %H:%M:%S +0000", eta)
                     timestamp = current_time
                     print("{:07}".format(step),
                           "{:2f} s/step".format(time_per_step),
                           "psnr_train: {:2f}".format(train_psnr),
                           "loss_train: {:2f}".format(loss.item()),
-                          "val_psnr: {:2f}".format(val_psnr))
+                          "val_psnr: {:2f}".format(val_psnr),
+                          "eta:", eta)
 
                     if run:
                         run.log("psnr_train", train_psnr)

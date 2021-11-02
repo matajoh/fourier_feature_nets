@@ -219,6 +219,16 @@ class RaySamples(NamedTuple("RaySamples", [("positions", torch.Tensor),
             self.t_values.to(*args),
         )
 
+    def pin_memory(self) -> "RaySamples":
+        """Pins all tensors in preparation for movement to the GPU."""
+        return RaySamples(
+            self.positions.pin_memory(),
+            self.view_directions.pin_memory(),
+            self.colors.pin_memory(),
+            self.alphas.pin_memory(),
+            self.t_values.pin_memory()
+        )
+
 
 class RaySamplingDataset(Dataset):
     """Dataset for sampling from rays cast into a volume."""
@@ -412,17 +422,20 @@ class RaySamplingDataset(Dataset):
         Returns:
             RaySamplingDataset: a subset of the dataset with the sampled cameras
         """
-        positions = np.concatenate([cam.position for cam in self.cameras])
-        samples = set([0])
-        all_directions = set(range(len(positions)))
-        while len(samples) < num_cameras:
-            sample_positions = positions[list(samples)]
-            distances = positions[:, None, :] - sample_positions[None, :, :]
-            distances = np.square(distances).sum(-1).min(-1)
-            unchosen = np.array(list(all_directions - samples))
-            distances = np.array(distances[unchosen], np.float32)
-            choice = unchosen[distances.argmax()]
-            samples.add(choice)
+        if self.num_cameras < num_cameras:
+            samples = list(range(self.num_cameras))
+        else:
+            positions = np.concatenate([cam.position for cam in self.cameras])
+            samples = set([0])
+            all_directions = set(range(len(positions)))
+            while len(samples) < num_cameras:
+                sample_positions = positions[list(samples)]
+                distances = positions[:, None, :] - sample_positions[None, :, :]
+                distances = np.square(distances).sum(-1).min(-1)
+                unchosen = np.array(list(all_directions - samples))
+                distances = np.array(distances[unchosen], np.float32)
+                choice = unchosen[distances.argmax()]
+                samples.add(choice)
 
         return self.subset(list(samples), num_samples, resolution, stratified)
 
@@ -493,7 +506,7 @@ class RaySamplingDataset(Dataset):
             permute = permute * scale
             t_values = t_values + permute
         else:
-            t_values = t_values.expand(num_rays, -1)
+            t_values = t_values.repeat(num_rays, 1)
 
         if self.focus_sampling:
             num_focus_samples = self.num_samples - num_samples
@@ -503,7 +516,7 @@ class RaySamplingDataset(Dataset):
 
         starts = starts.reshape(num_rays, 1, 3)
         directions = directions.reshape(num_rays, 1, 3)
-        directions = directions.expand(-1, self.num_samples, 3)
+        directions = directions.repeat(1, self.num_samples, 1)
         positions = starts + t_values.unsqueeze(-1) * directions
 
         colors = self.colors[idx]
@@ -512,7 +525,10 @@ class RaySamplingDataset(Dataset):
         else:
             alphas = None
 
-        return RaySamples(positions, directions, colors, alphas, t_values)
+        ray_samples = RaySamples(positions, directions, colors,
+                                 alphas, t_values)
+        ray_samples = ray_samples.pin_memory()
+        return ray_samples
 
     @staticmethod
     def load(path: str, split: str, resolution: int,
