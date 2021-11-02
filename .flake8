@@ -13,7 +13,3 @@ extend-ignore =
             # Quite common in ML (e.g. import torch.nn.functional as F)
     N817, # Camelcase imported as acronym
             # Commonly used with standard library (e.g. import xml.etree.ElementTree as ET)
-
-#================================== Repo-specific config ==================================
-ignore-names = 
-    R,T   # Used in PyTorch3D API (suppress N806 - Variable in function should be lowercase)
