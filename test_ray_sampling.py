@@ -23,10 +23,6 @@ def _parse_args():
                         help="Path to a model to use to predict opacity")
     parser.add_argument("--batch-size", type=int, default=4096,
                         help="Batch size to use when quering the opacity model")
-    parser.add_argument("--near", type=float, default=2.0,
-                        help="Minimum t value")
-    parser.add_argument("--far", type=float, default=6.0,
-                        help="Maximum t value")
     return parser.parse_args()
 
 
@@ -42,19 +38,18 @@ def _main():
     else:
         model = None
 
-    dataset = RaySamplingDataset.load(args.data_path, args.split, args.resolution,
+    dataset = RaySamplingDataset.load(args.data_path, args.split,
                                       args.num_samples, args.stratified, model,
-                                      args.batch_size, args.near, args.far)
+                                      args.batch_size)
     if dataset is None:
         return 1
 
     if args.num_cameras and args.num_cameras < dataset.num_cameras:
         dataset = dataset.sample_cameras(args.num_cameras,
                                          args.num_samples,
-                                         args.resolution,
                                          args.stratified)
 
-    scene = dataset.to_scenepic()
+    scene = dataset.to_scenepic(args.resolution)
     scene.save_as_html(args.output_path, "Ray Sampling")
 
 
