@@ -211,15 +211,18 @@ class RaySamples(NamedTuple("RaySamples", [("positions", torch.Tensor),
     """
     def to(self, *args) -> "RaySamples":
         """Calls torch.to on each tensor in the sample."""
-        return RaySamples(*[tensor.to(*args) for tensor in self])
+        return RaySamples(*[None if tensor is None else tensor.to(*args)
+                            for tensor in self])
 
     def pin_memory(self) -> "RaySamples":
         """Pins all tensors in preparation for movement to the GPU."""
-        return RaySamples(*[tensor.pin_memory() for tensor in self])
+        return RaySamples(*[None if tensor is None else tensor.pin_memory()
+                            for tensor in self])
 
     def subset(self, index: List[int]) -> "RaySamples":
         """Selects a subset of the samples."""
-        return RaySamples(*[tensor[index] for tensor in self])
+        return RaySamples(*[None if tensor is None else tensor[index]
+                            for tensor in self])
 
 
 def _linspace(start: torch.Tensor, stop: torch.Tensor, num_samples: int):
@@ -333,7 +336,7 @@ class RaySamplingDataset(Dataset):
         self.crop_index = torch.cat(crop_index)
         self.starts = torch.cat(starts)
         self.directions = torch.cat(directions)
-        self.near_far = torch.cat(near_far)
+        self.near_far = torch.cat(near_far, -1)
 
         if len(alphas) > 0:
             self.alphas = torch.cat(alphas)
@@ -349,17 +352,19 @@ class RaySamplingDataset(Dataset):
 
     def _near_far(self, starts: np.ndarray,
                   directions: np.ndarray) -> np.ndarray:
-        with np.errstate(divide='ignore', invalid='ignore'):
+        with np.errstate(divide="ignore", invalid="ignore"):
             test0 = (self.bounds_min - starts) / directions
             test1 = (self.bounds_max - starts) / directions
 
-        int0 = np.where(test0 < test1, test0, test1)
-        int1 = np.where(test0 > test1, test0, test1)
+        near = np.where(test0 < test1, test0, test1)
+        far = np.where(test0 > test1, test0, test1)
 
-        int0 = int0.max(-1)
-        int1 = int1.min(-1)
-        near = np.where(int0 < int1, int0, int1)
-        far = np.where(int0 > int1, int0, int1)
+        near = near.max(-1)
+        far = far.min(-1)
+
+        valid = near < far
+        near[:] = np.maximum(0.1, near[valid].min())
+        far[:] = far[valid].max()
         return np.stack([near, far])
 
     def _determine_opacity(self, t_values: torch.Tensor,
@@ -463,7 +468,8 @@ class RaySamplingDataset(Dataset):
     def _sample_t_values(self, idx: List[int], num_samples: int) -> torch.Tensor:
         num_rays = len(idx)
 
-        t_values = _linspace(self.near_far[0], self.near_far[1], num_samples)
+        near, far = self.near_far[:, idx]
+        t_values = _linspace(near, far, num_samples)
         t_values = 0.5 * (t_values[..., :-1] + t_values[..., 1:])
 
         if self.stratified:
@@ -516,9 +522,10 @@ class RaySamplingDataset(Dataset):
         else:
             num_samples = self.num_samples
 
-        t_values = _linspace(self.near_far[0], self.near_far[1], num_samples)
+        near, far = self.near_far[:, idx]
+        t_values = _linspace(near, far, num_samples)
         if self.stratified:
-            scale = (self.near_far[1] - self.near_far[0]) / num_samples
+            scale = (far - near) / num_samples
             permute = torch.rand((num_rays, num_samples),
                                  dtype=torch.float32)
             permute = permute * scale.unsqueeze(-1)
@@ -536,10 +543,10 @@ class RaySamplingDataset(Dataset):
         positions = starts + t_values.unsqueeze(-1) * directions
 
         colors = self.colors[idx]
-        if len(self.alphas) > 0:
-            alphas = self.alphas[idx]
-        else:
+        if self.alphas is None:
             alphas = None
+        else:
+            alphas = self.alphas[idx]
 
         ray_samples = RaySamples(positions, directions, colors,
                                  alphas, t_values)
@@ -663,8 +670,13 @@ class RaySamplingDataset(Dataset):
 
         bar = ETABar("Sampling Rays", max=self.num_cameras)
 
+        bounds = scene.create_mesh("bounds", layer_id="bounds")
+        bounds.add_cube(sp.Colors.Blue, transform=self.bounds)
+
         frame = canvas.create_frame()
         frame.add_mesh(frustums)
+        frame.add_mesh(bounds)
+        frame.camera = sp.Camera([0, 0, 10], aspect_ratio=width/height)
         for mesh in image_meshes:
             frame.add_mesh(mesh)
 
@@ -683,7 +695,7 @@ class RaySamplingDataset(Dataset):
             not_empty = np.logical_not(empty)
 
             samples = scene.create_mesh()
-            samples.add_sphere(sp.Colors.White, transform=sp.Transforms.scale(0.02))
+            samples.add_sphere(sp.Colors.White, transform=sp.Transforms.scale(0.01))
             samples.enable_instancing(positions=positions[not_empty],
                                       colors=colors[not_empty])
 
@@ -694,12 +706,17 @@ class RaySamplingDataset(Dataset):
 
             frame = canvas.create_frame()
             frame.camera = camera.to_scenepic()
+            frame.add_mesh(bounds)
             frame.add_mesh(samples)
             frame.add_mesh(empty_samples)
             frame.add_mesh(frustums)
             for mesh in image_meshes:
                 frame.add_mesh(mesh)
 
+        canvas.set_layer_settings({
+            "bounds": {"opacity": 0.25},
+            "images": {"opacity": 0.5}
+        })
         bar.finish()
 
         scene.framerate = 10
