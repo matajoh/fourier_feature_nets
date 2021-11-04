@@ -29,12 +29,12 @@ def _parse_args():
                         default="RGB")
     parser.add_argument("--num-channels", type=int, default=256,
                         help="Number of channels in the MLP")
-    parser.add_argument("--num-frequencies", type=int, default=256,
-                        help="Number of frequencies used for encoding")
-    parser.add_argument("--pos-sigma", type=float, default=6,
-                        help="Value of sigma for the positional model")
+    parser.add_argument("--embedding_size", type=int, default=256,
+                        help="Embedding size used for encoding")
+    parser.add_argument("--pos-max-log-scale", type=float, default=6,
+                        help="Max log scale for the positional encoding")
     parser.add_argument("--gauss-sigma", type=float, default=10,
-                        help="Value of sigma for the gaussian model")
+                        help="Standard deviation for the gaussian encoding")
     parser.add_argument("--num-steps", type=int, default=2000)
     parser.add_argument("--learning-rate", type=float, default=1e-3,
                         help="Learning rate for the optimizer")
@@ -72,23 +72,23 @@ def _main():
     if args.nerf_model == "mlp":
         model = nerf.MLP(2, 3,
                          num_channels=args.num_channels,
-                         output_act=True)
+                         output_sigmoid=True)
     elif args.nerf_model == "basic":
         model = nerf.BasicFourierMLP(2, 3,
                                      num_channels=args.num_channels,
-                                     output_act=True)
+                                     output_sigmoid=True)
     elif args.nerf_model == "positional":
         model = nerf.PositionalFourierMLP(2, 3,
-                                          sigma=args.pos_sigma,
+                                          max_log_scale=args.pos_max_log_scale,
                                           num_channels=args.num_channels,
-                                          num_frequencies=args.num_frequencies,
-                                          output_act=True)
+                                          embedding_size=args.embedding_size,
+                                          output_sigmoid=True)
     elif args.nerf_model == "gaussian":
         model = nerf.GaussianFourierMLP(2, 3,
                                         sigma=args.gauss_sigma,
                                         num_channels=args.num_channels,
-                                        num_frequencies=args.num_frequencies,
-                                        output_act=True)
+                                        embedding_size=args.embedding_size,
+                                        output_sigmoid=True)
     else:
         raise NotImplementedError("Unsupported model: {}".format(args.nerf_model))
 

@@ -18,18 +18,16 @@ def _parse_args():
                         help="Path to the opacity model")
     parser.add_argument("--num-samples", type=int, default=128,
                         help="Number of samples to take")
-    parser.add_argument("--resolution", type=int, default=400,
-                        help="Ray sampling resolution")
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--learning-rate", type=float, default=5e-4)
     parser.add_argument("--num-channels", type=int, default=256,
                         help="Number of channels in the MLP")
-    parser.add_argument("--num-frequencies", type=int, default=256,
-                        help="Number of frequencies used for encoding")
-    parser.add_argument("--pos-sigma", type=float, default=1.27,
-                        help="Value of sigma for the positional model")
-    parser.add_argument("--gauss-sigma", type=float, default=4.14,
-                        help="Value of sigma for the gaussian model")
+    parser.add_argument("--embedding-size", type=int, default=256,
+                        help="Embedding size used for encoding")
+    parser.add_argument("--pos-max-log-scale", type=float, default=1.27,
+                        help="Max log scale for the positional encoding")
+    parser.add_argument("--gauss-sigma", type=float, default=6.05,
+                        help="Standard deviation for the gaussian encoding")
     parser.add_argument("--num-steps", type=int, default=50000,
                         help="Number of steps to use for training.")
     parser.add_argument("--report-interval", type=int, default=1000,
@@ -52,13 +50,15 @@ def _main():
     elif args.nerf_model == "basic":
         model = nerf.BasicFourierMLP(3, 4, num_channels=args.num_channels)
     elif args.nerf_model == "positional":
-        model = nerf.PositionalFourierMLP(3, 4, sigma=args.pos_sigma,
+        model = nerf.PositionalFourierMLP(3, 4,
+                                          max_log_scale=args.pos_max_log_scale,
                                           num_channels=args.num_channels,
-                                          num_frequencies=args.num_frequencies)
+                                          embedding_size=args.num_frequencies)
     elif args.nerf_model == "gaussian":
-        model = nerf.GaussianFourierMLP(3, 4, sigma=args.gauss_sigma,
+        model = nerf.GaussianFourierMLP(3, 4,
+                                        sigma=args.gauss_sigma,
                                         num_channels=args.num_channels,
-                                        num_frequencies=args.num_frequencies)
+                                        embedding_size=args.num_frequencies)
 
     if args.opacity_model:
         opacity_model = nerf.load_model(args.opacity_model)
@@ -70,12 +70,10 @@ def _main():
         opacity_model = None
 
     train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
-                                                 args.resolution,
                                                  args.num_samples, True,
                                                  opacity_model,
                                                  args.batch_size)
     val_dataset = nerf.RaySamplingDataset.load(args.data_path, "val",
-                                               args.resolution,
                                                args.num_samples, False,
                                                opacity_model,
                                                args.batch_size)

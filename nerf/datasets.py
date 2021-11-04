@@ -100,9 +100,9 @@ class PixelDataset:
         val_uv = []
         val_color = []
         for row in range(size):
-            u = (row + 0.5) / size
+            u = (2 * (row + 0.5) / size) + 1
             for col in range(size):
-                v = (col + 0.5) / size
+                v = (2 * (col + 0.5) / size) + 1
                 color = pixels[row, col].tolist()
                 val_uv.append((u, v))
                 val_color.append(color)
@@ -156,8 +156,13 @@ class PixelDataset:
         Returns:
             torch.Tensor: The image UVs
         """
-        vals = np.linspace(0, 1, size)
-        uvs = np.stack(np.meshgrid(vals, vals, indexing="ij"), -1)
+        uvs = []
+        for row in range(size):
+            u = (2 * (row + 0.5) / size) + 1
+            for col in range(size):
+                v = (2 * (col + 0.5) / size) + 1
+                uvs.append((u, v))
+
         return torch.FloatTensor(uvs).to(device=device)
 
     def psnr(self, colors: torch.Tensor) -> float:

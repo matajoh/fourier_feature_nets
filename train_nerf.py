@@ -27,11 +27,11 @@ def _parse_args():
                         help="Number of channels in the MLP")
     parser.add_argument("--pos-freq", type=int, default=10,
                         help="Number of frequencies used for encoding")
-    parser.add_argument("--pos-sigma", type=float, default=1.59,
+    parser.add_argument("--pos-max-log-scale", type=float, default=9,
                         help="Value of sigma for the positional model")
     parser.add_argument("--view-freq", type=int, default=4,
                         help="Number of frequencies used for encoding")
-    parser.add_argument("--view-sigma", type=float, default=0.64,
+    parser.add_argument("--view-max-log-scale", type=float, default=3,
                         help="Value of sigma for the positional model")
     parser.add_argument("--num-steps", type=int, default=50000,
                         help="Number of steps to use for training.")
@@ -53,8 +53,8 @@ def _main():
 
     torch.manual_seed(args.seed)
     model = nerf.NeRF(args.num_layers, args.num_channels,
-                      args.pos_sigma, args.pos_freq,
-                      args.view_sigma, args.view_freq,
+                      args.pos_max_log_scale, args.pos_freq,
+                      args.view_max_log_scale, args.view_freq,
                       [4], not args.omit_inputs)
 
     if args.opacity_model:
@@ -67,11 +67,9 @@ def _main():
         opacity_model = None
 
     train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
-                                                 args.resolution,
                                                  args.num_samples, True,
                                                  opacity_model, args.batch_size)
     val_dataset = nerf.RaySamplingDataset.load(args.data_path, "val",
-                                               args.resolution,
                                                args.num_samples, False,
                                                opacity_model, args.batch_size)
 

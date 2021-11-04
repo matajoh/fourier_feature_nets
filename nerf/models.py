@@ -69,7 +69,7 @@ class FourierFeatureMLP(nn.Module):
         if self.frequencies is None:
             output = inputs
         else:
-            encoded = inputs @ self.frequencies
+            encoded = (2 * math.pi * inputs) @ self.frequencies
             output = torch.cat([encoded.cos(), encoded.sin()], dim=-1)
 
         output = self.layers(output)
@@ -95,7 +95,7 @@ class MLP(FourierFeatureMLP):
     """Unencoded FFN, essentially a standard MLP."""
 
     def __init__(self, num_inputs: int, num_outputs: int, num_layers=4,
-                 num_channels=256, output_act=None):
+                 num_channels=256, output_sigmoid=False):
         """Constructor.
 
         Args:
@@ -105,18 +105,19 @@ class MLP(FourierFeatureMLP):
                                         Defaults to 4.
             num_channels (int, optional): Number of channels in the MLP.
                                           Defaults to 256.
-            output_act (Callable, optional): Optional output activation.
-                                             Defaults to None.
+            output_sigmoid (bool, optional): Optional output sigmoid.
+                                             Defaults to False.
         """
         FourierFeatureMLP.__init__(self, num_inputs, num_outputs,
-                                   None, num_layers, num_channels, output_act)
+                                   None, num_layers, num_channels,
+                                   output_sigmoid)
 
 
 class BasicFourierMLP(FourierFeatureMLP):
     """Basic version of FFN in which inputs are projected onto the unit circle."""
 
     def __init__(self, num_inputs: int, num_outputs: int, num_layers=4,
-                 num_channels=256, output_act=None):
+                 num_channels=256, output_sigmoid=False):
         """Constructor.
 
         Args:
@@ -126,45 +127,46 @@ class BasicFourierMLP(FourierFeatureMLP):
                                         Defaults to 4.
             num_channels (int, optional): Number of channels in the MLP.
                                           Defaults to 256.
-            output_act (Callable, optional): Optional output activation.
-                                             Defaults to None.
+            output_sigmoid (bool, optional): Optional output sigmoid.
+                                             Defaults to False.
         """
-        frequencies_matrix = torch.eye(num_inputs) * 2 * math.pi
+        frequencies_matrix = torch.eye(num_inputs)
         FourierFeatureMLP.__init__(self, num_inputs, num_outputs,
                                    frequencies_matrix, num_layers,
-                                   num_channels, output_act)
+                                   num_channels, output_sigmoid)
 
 
 class PositionalFourierMLP(FourierFeatureMLP):
     """Version of FFN with positional encoding."""
-    def __init__(self, num_inputs: int, num_outputs: int, sigma: float,
-                 num_layers=4, num_channels=256, num_frequencies=256,
-                 output_act=None):
+    def __init__(self, num_inputs: int, num_outputs: int, max_log_scale: float,
+                 num_layers=4, num_channels=256, embedding_size=256,
+                 output_sigmoid=False):
         """Constructor.
 
         Args:
             num_inputs (int): Number of dimensions in the input
             num_outputs (int): Number of dimensions in the output
-            sigma (float): Maximum log scale
+            max_log_scale (float): Maximum log scale for embedding
             num_layers (int, optional): Number of layers in the MLP.
                                         Defaults to 4.
             num_channels (int, optional): Number of channels in the MLP.
                                           Defaults to 256.
-            num_frequencies (int, optional): Number of frequencies to use for
-                                             the encoding. Defaults to 256.
-            output_act (Callable, optional): Optional output activation.
-                                             Defaults to None.
+            embedding_size (int, optional): The size of the feature embedding.
+                                            Defaults to 256.
+            output_sigmoid (bool, optional): Optional output sigmoid.
+                                             Defaults to False.
         """
-        frequencies_matrix = self.encoding(sigma, num_frequencies, num_inputs)
+        frequencies_matrix = self.encoding(max_log_scale, embedding_size,
+                                           num_inputs)
         FourierFeatureMLP.__init__(self, num_inputs, num_outputs,
                                    frequencies_matrix, num_layers,
-                                   num_channels, output_act)
+                                   num_channels, output_sigmoid)
 
     @staticmethod
-    def encoding(sigma: float, num_frequencies: int, num_inputs: int):
-        exponents = torch.arange(num_frequencies, dtype=torch.float32)
-        exponents /= num_frequencies
-        frequencies_matrix = 2 * math.pi * torch.pow(sigma, exponents)
+    def encoding(max_log_scale: float, embedding_size: int, num_inputs: int):
+        frequencies_matrix = [math.pow(max_log_scale, j / embedding_size)
+                              for j in range(embedding_size)]
+        frequencies_matrix = torch.FloatTensor(frequencies_matrix)
         frequencies_matrix = frequencies_matrix.reshape(-1, 1, 1)
         frequencies_matrix = torch.eye(num_inputs) * frequencies_matrix
         frequencies_matrix = frequencies_matrix.reshape(-1, num_inputs)
@@ -176,50 +178,48 @@ class GaussianFourierMLP(FourierFeatureMLP):
     """Version of a FFN using a full Gaussian matrix for encoding."""
 
     def __init__(self, num_inputs: int, num_outputs: int, sigma: float,
-                 num_layers=4, num_channels=256, num_frequencies=256,
-                 output_act=None):
+                 num_layers=4, num_channels=256, embedding_size=256,
+                 output_sigmoid=False):
         """Constructor.
 
         Args:
             num_inputs (int): Number of dimensions in the input
             num_outputs (int): Number of dimensions in the output
-            sigma (float): Standard deviation of normal distribution used for
-                           sampling the Fourier exponents.
+            sigma (float): Standard deviation of the Gaussian distribution
             num_layers (int, optional): Number of layers in the MLP.
                                         Defaults to 4.
             num_channels (int, optional): Number of channels in the MLP.
                                           Defaults to 256.
-            num_frequencies (int, optional): Number of frequencies to use for
+            embedding_size (int, optional): Number of frequencies to use for
                                              the encoding. Defaults to 256.
-            output_act (Callable, optional): Optional output activation.
-                                             Defaults to None.
+            output_sigmoid (bool, optional): Optional output sigmoid.
+                                             Defaults to False.
         """
-        frequencies = torch.normal(0, sigma, size=(num_inputs, num_frequencies))
-        frequencies *= 2 * math.pi
+        frequencies = torch.normal(0, sigma, size=(num_inputs, embedding_size))
         FourierFeatureMLP.__init__(self, num_inputs, num_outputs, frequencies,
-                                   num_layers, num_channels, output_act)
+                                   num_layers, num_channels, output_sigmoid)
 
 
 class NeRF(nn.Module):
     def __init__(self, num_layers: int, num_channels: int,
-                 sigma_pos: float, num_freq_pos: int,
-                 sigma_view: float, num_freq_view: int,
+                 max_log_scale_pos: float, num_freq_pos: int,
+                 max_log_scale_view: float, num_freq_view: int,
                  skips: Sequence[int], include_inputs: bool):
         nn.Module.__init__(self)
         self.params = {
             "num_layers": num_layers,
             "num_channels": num_channels,
-            "sigma_pos": sigma_pos,
+            "max_log_scale_pos": max_log_scale_pos,
             "num_freq_pos": num_freq_pos,
-            "sigma_view": sigma_view,
+            "max_log_scale_view": max_log_scale_view,
             "num_freq_view": num_freq_view,
             "skips": list(skips),
             "include_inputs": include_inputs
         }
 
-        pos_encoding = self.encoding(sigma_pos, num_freq_pos, 3)
+        pos_encoding = self.encoding(max_log_scale_pos, num_freq_pos, 3)
         self.pos_encoding = nn.Parameter(pos_encoding, requires_grad=False)
-        view_encoding = self.encoding(sigma_view, num_freq_view, 3)
+        view_encoding = self.encoding(max_log_scale_view, num_freq_view, 3)
         self.view_encoding = nn.Parameter(view_encoding, requires_grad=False)
         self.skips = set(skips)
         self.include_inputs = include_inputs
@@ -249,9 +249,8 @@ class NeRF(nn.Module):
         self.color_out = nn.Linear(layer_inputs, 3)
 
     @staticmethod
-    def encoding(sigma: float, num_freq: int, num_inputs: int):
-        max_log_freq = sigma * 2 * math.pi
-        frequencies_matrix = 2. ** torch.linspace(0, max_log_freq, num_freq)
+    def encoding(max_log_scale: float, num_freq: int, num_inputs: int):
+        frequencies_matrix = 2. ** torch.linspace(0, max_log_scale, num_freq)
         frequencies_matrix = frequencies_matrix.reshape(-1, 1, 1)
         frequencies_matrix = torch.eye(num_inputs) * frequencies_matrix
         frequencies_matrix = frequencies_matrix.reshape(-1, num_inputs)
