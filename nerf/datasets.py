@@ -271,6 +271,14 @@ class RaySamplingDataset(Dataset):
         self.num_rays = len(cameras) * self.rays_per_camera
         self.num_cameras = len(cameras)
         self.num_samples = num_samples
+        print({
+            "width": self.image_width,
+            "height": self.image_height,
+            "rays_per_camera": self.rays_per_camera,
+            "num_cameras": self.num_cameras,
+            "num_rays": self.num_rays,
+            "num_samples": self.num_samples
+        })
         self.images = images
         self.cameras = cameras
         self.stratified = stratified
