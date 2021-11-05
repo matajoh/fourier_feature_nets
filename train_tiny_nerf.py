@@ -53,12 +53,12 @@ def _main():
         model = nerf.PositionalFourierMLP(3, 4,
                                           max_log_scale=args.pos_max_log_scale,
                                           num_channels=args.num_channels,
-                                          embedding_size=args.num_frequencies)
+                                          embedding_size=args.embedding_size)
     elif args.nerf_model == "gaussian":
         model = nerf.GaussianFourierMLP(3, 4,
                                         sigma=args.gauss_sigma,
                                         num_channels=args.num_channels,
-                                        embedding_size=args.num_frequencies)
+                                        embedding_size=args.embedding_size)
 
     if args.opacity_model:
         opacity_model = nerf.load_model(args.opacity_model)
