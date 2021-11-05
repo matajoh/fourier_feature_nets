@@ -40,7 +40,6 @@ def _main():
     if args.num_cameras < dataset.num_cameras:
         dataset = dataset.sample_cameras(args.num_cameras,
                                          dataset.num_samples,
-                                         dataset.resolution,
                                          False)
 
     raycaster = nerf.Raycaster(model, isinstance(model, nerf.NeRF))

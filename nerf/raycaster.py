@@ -106,20 +106,18 @@ class Raycaster(nn.Module):
         with torch.no_grad():
             index = index % dataset.num_cameras
             device = next(self.model.parameters()).device
-            resolution = dataset.resolution
-            num_rays = resolution * resolution
-            image_start = index * num_rays
-            image_end = image_start + num_rays
+            image_rays = dataset.rays_for_camera(index)
+            num_rays = len(image_rays.positions)
             predicted = []
             actual = []
             depth = []
             error = []
             loss = []
             max_depth = 10
-            for start in range(image_start, image_end, batch_size):
-                end = min(start + batch_size, image_end)
+            for start in range(0, num_rays, batch_size):
+                end = min(start + batch_size, num_rays)
                 idx = list(range(start, end))
-                ray_samples = dataset[idx]
+                ray_samples = image_rays.subset(idx)
                 ray_samples = ray_samples.to(device)
                 pred_colors, pred_alphas, pred_depth = self.render(ray_samples, True)
                 pred_colors = pred_colors.cpu().numpy()
@@ -141,23 +139,24 @@ class Raycaster(nn.Module):
             loss = np.mean(loss)
             psnr = -10. * np.log10(loss)
 
+            width, height = dataset.image_width, dataset.image_height
             predicted = np.concatenate(predicted)
             predicted = np.clip(predicted, 0, 1)
-            predicted = predicted.reshape(resolution, resolution, 3)
+            predicted = predicted.reshape(height, width, 3)
             predicted = (predicted * 255).astype(np.uint8)
 
             actual = np.concatenate(actual)
-            actual = actual.reshape(resolution, resolution, 3)
+            actual = actual.reshape(height, width, 3)
             actual = (actual * 255).astype(np.uint8)
 
             depth = np.concatenate(depth)
             depth = np.clip(depth, 0, max_depth)
-            depth = (depth / max_depth).reshape(resolution, resolution, 1)
+            depth = (depth / max_depth).reshape(height, width, 1)
             depth = (depth * 255).astype(np.uint8)
 
             error = np.concatenate(error)
             error = np.sqrt(error)
-            error = (error / error.max()).reshape(resolution, resolution, 1)
+            error = (error / error.max()).reshape(height, width, 1)
             error = (error * 255).astype(np.uint8)
 
             name = "s{:07}_c{:03}.png".format(step, index)
@@ -167,11 +166,11 @@ class Raycaster(nn.Module):
 
             image_path = os.path.join(image_dir, name)
 
-            compare = np.zeros((resolution*2, resolution*2, 3), np.uint8)
-            compare[:resolution, :resolution] = predicted
-            compare[resolution:, :resolution] = actual
-            compare[:resolution, resolution:] = depth
-            compare[resolution:, resolution:] = error
+            compare = np.zeros((height*2, width*2, 3), np.uint8)
+            compare[:height, :width] = predicted
+            compare[height:, :width] = actual
+            compare[:height, width:] = depth
+            compare[height:, width:] = error
             cv2.imwrite(image_path, compare[:, :, ::-1])
             return psnr
 
@@ -210,7 +209,6 @@ class Raycaster(nn.Module):
         self._use_alpha = train_dataset.alphas is not None
         trainval_dataset = train_dataset.sample_cameras(val_dataset.num_cameras,
                                                         val_dataset.num_samples,
-                                                        val_dataset.resolution,
                                                         False)
 
         optim = torch.optim.Adam(self.model.parameters(), learning_rate)
@@ -241,7 +239,7 @@ class Raycaster(nn.Module):
                 loss.backward()
                 optim.step()
 
-                if step % reporting_interval == 0:
+                if step and step % reporting_interval == 0:
                     val_psnr = self._render_eval_image(val_dataset, step,
                                                        4 * batch_size,
                                                        results_dir, render_index)
@@ -250,12 +248,16 @@ class Raycaster(nn.Module):
                                                          results_dir, render_index)
                     current_time = time.time()
                     time_per_step = (current_time - timestamp) / reporting_interval
+                    remaining_time = (num_steps - step) * time_per_step
+                    eta = time.gmtime(current_time + remaining_time)
+                    eta = time.strftime("%a, %d %b %Y %H:%M:%S +0000", eta)
                     timestamp = current_time
                     print("{:07}".format(step),
                           "{:2f} s/step".format(time_per_step),
                           "psnr_train: {:2f}".format(train_psnr),
                           "loss_train: {:2f}".format(loss.item()),
-                          "val_psnr: {:2f}".format(val_psnr))
+                          "val_psnr: {:2f}".format(val_psnr),
+                          "eta:", eta)
 
                     if run:
                         run.log("psnr_train", train_psnr)
@@ -293,13 +295,13 @@ class Raycaster(nn.Module):
         Returns:
             sp.Scene: The constructed scenepic
         """
-        dataset = dataset.sample_cameras(num_cameras, num_samples,
-                                         resolution, False)
+        dataset = dataset.sample_cameras(num_cameras, num_samples, False)
 
         scene = sp.Scene()
         frustums = scene.create_mesh("frustums", layer_id="frustums")
-        canvas = scene.create_canvas_3d(width=800,
-                                        height=800)
+        height = 800
+        width = dataset.image_width * height / dataset.image_height
+        canvas = scene.create_canvas_3d(width=width, height=height)
         canvas.shading = sp.Shading(sp.Colors.Gray)
 
         cmap = get_cmap("jet")
@@ -323,15 +325,21 @@ class Raycaster(nn.Module):
 
         bar.finish()
 
+        num_x_samples = resolution * dataset.image_width // dataset.image_height
+        num_y_samples = resolution
+        x_vals = np.linspace(0, dataset.image_width - 1, num_x_samples) + 0.5
+        y_vals = np.linspace(0, dataset.image_height - 1, num_y_samples) + 0.5
+        x_vals, y_vals = np.meshgrid(x_vals.astype(np.int32),
+                                     y_vals.astype(np.int32))
+        index = y_vals.reshape(-1) * dataset.image_width + x_vals.reshape(-1)
+        index = index.tolist()
+
         bar = ETABar("Sampling rays", max=dataset.num_cameras)
-        num_rays = dataset.resolution ** 2
         device = next(self.model.parameters()).device
         for i, camera in enumerate(dataset.cameras):
             bar.next()
-            start = i * num_rays
-            end = start + num_rays
-            index = [i for i in range(start, end)]
-            ray_samples = dataset[index]
+            ray_samples = dataset.rays_for_camera(i)
+            ray_samples = ray_samples.subset(index)
             ray_samples = ray_samples.to(device)
 
             with torch.no_grad():
@@ -342,7 +350,7 @@ class Raycaster(nn.Module):
                 else:
                     color_o = self.model(positions)
 
-                color_o = color_o.reshape(num_rays, num_samples, 4)
+                color_o = color_o.reshape(-1, num_samples, 4)
                 color, opacity = torch.split(color_o, [3, 1], -1)
                 color = torch.sigmoid(color)
                 opacity = F.softplus(opacity)

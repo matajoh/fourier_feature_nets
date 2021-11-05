@@ -17,8 +17,6 @@ def _parse_args():
                         help="Scale of the volume")
     parser.add_argument("--num-samples", type=int, default=256,
                         help="Number of samples to take")
-    parser.add_argument("--resolution", type=int, default=400,
-                        help="Ray sampling resolution")
     parser.add_argument("--num-cameras", type=int, default=100,
                         help="Number of cameras")
     parser.add_argument("--batch-size", type=int, default=1024)
@@ -42,10 +40,8 @@ def _main():
     model = nerf.Voxels(args.side, args.scale)
 
     train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
-                                                 args.resolution,
                                                  args.num_samples, True)
     val_dataset = nerf.RaySamplingDataset.load(args.data_path, "val",
-                                               args.resolution,
                                                args.num_samples, False)
 
     if train_dataset is None:
