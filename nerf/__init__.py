@@ -14,6 +14,7 @@ from .models import (
 )
 from .octree import OcTree
 from .raycaster import Raycaster
+from .raysampler import RaySampler
 from .triangulation import Triangulation
 from .utils import ETABar
 
@@ -31,6 +32,7 @@ __all__ = ["CameraInfo",
            "OcTree",
            "PixelDataset",
            "Raycaster",
+           "RaySampler",
            "RaySamples",
            "RaySamplingDataset",
            "Triangulation"]

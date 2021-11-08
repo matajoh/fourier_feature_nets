@@ -47,7 +47,7 @@ def _main():
     if train_dataset is None:
         return 1
 
-    raycaster = nerf.Raycaster(model)
+    raycaster = nerf.Raycaster(model, True)
     raycaster.to("cuda")
 
     log = raycaster.fit(train_dataset, val_dataset, args.results_dir,

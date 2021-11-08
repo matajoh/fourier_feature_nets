@@ -11,11 +11,11 @@ import numpy as np
 import scenepic as sp
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from .camera_info import CameraInfo
-from .utils import calculate_blend_weights, download_asset, ETABar
+from .utils import download_asset, ETABar
+from .raysampler import RaySampler, RaySamples
 
 
 class PixelData(namedtuple("PixelData", ["uv", "color"])):
@@ -112,7 +112,7 @@ class PixelDataset:
 
         train_data = PixelData(torch.FloatTensor(train_uv), torch.FloatTensor(train_color))
         val_data = PixelData(torch.FloatTensor(val_uv), torch.FloatTensor(val_color))
-        return PixelDataset(size, color_space, train_data, val_data)
+        return PixelDataset(size, color_space, train_data, val_data)      
 
     def to(self, *args) -> "PixelDataset":
         """Equivalent of torch.Tensor.to for all tensors in the dataset.
@@ -178,62 +178,29 @@ class PixelDataset:
         return -10 * math.log10(mse)
 
 
-def _determine_cdf(t_values: torch.Tensor,
-                   opacity: torch.Tensor) -> torch.Tensor:
-    weights = calculate_blend_weights(t_values, opacity)
-    weights = weights[:, 1:-1]
-    weights += 1e-5
-    cdf = weights.cumsum(-1)
-    cdf = cdf / cdf[:, -1:]
-    cdf = torch.cat([torch.zeros_like(cdf[:, :1]), cdf], dim=-1)
-    return cdf
-
-
-class RaySamples(NamedTuple("RaySamples", [("positions", torch.Tensor),
-                                           ("view_directions", torch.Tensor),
-                                           ("colors", torch.Tensor),
-                                           ("alphas", torch.Tensor),
-                                           ("t_values", torch.Tensor)])):
-    """Points samples from rays.
-
-    Description:
-        Each sample is the result of the following equation:
-
-            start + direction * t
-
-        Where start is the position of the camera, and direction is the
-        direction of a ray passing through a pixel in an image from that
-        camera. The samples consist of the following parts:
-
-            positions: the 3D positions
-            view_directions: the direction from each position back to the camera
-            colors: the pixel colors for the ray
-            alphas: the alpha values for the ray (if present in the data)
-            t_values: the t_values corresponding to the positions
-
-        Each tensor is grouped by ray, so the first two dimensions will be
-        (num_rays,num_samples).
-    """
-    def to(self, *args) -> "RaySamples":
+class RaySamplesEntry(NamedTuple("RaySamplesEntry", [("samples", RaySamples),
+                                                     ("colors", torch.Tensor),
+                                                     ("alphas", torch.Tensor)])):
+    def to(self, *args) -> "RaySamplesEntry":
         """Calls torch.to on each tensor in the sample."""
-        return RaySamples(*[None if tensor is None else tensor.to(*args)
-                            for tensor in self])
+        alphas = None if self.alphas is None else self.alphas.to(*args)
+        return RaySamplesEntry(self.samples.to(*args),
+                               self.colors.to(*args),
+                               alphas)
 
-    def pin_memory(self) -> "RaySamples":
+    def pin_memory(self) -> "RaySamplesEntry":
         """Pins all tensors in preparation for movement to the GPU."""
-        return RaySamples(*[None if tensor is None else tensor.pin_memory()
-                            for tensor in self])
+        alphas = None if self.alphas is None else self.alphas.pin_memory()
+        return RaySamplesEntry(self.samples.pin_memory(),
+                               self.colors.pin_memory(),
+                               alphas)
 
-    def subset(self, index: List[int]) -> "RaySamples":
+    def subset(self, index: List[int]) -> "RaySamplesEntry":
         """Selects a subset of the samples."""
-        return RaySamples(*[None if tensor is None else tensor[index]
-                            for tensor in self])
-
-
-def _linspace(start: torch.Tensor, stop: torch.Tensor, num_samples: int):
-    diff = stop - start
-    samples = torch.linspace(0, 1, num_samples)
-    return start.unsqueeze(-1) + samples.unsqueeze(0) * diff.unsqueeze(-1)
+        alphas = None if self.alphas is None else self.alphas[index]
+        return RaySamplesEntry(self.samples.subset(index),
+                               self.colors[index],
+                               alphas)
 
 
 class RaySamplingDataset(Dataset):
@@ -267,32 +234,12 @@ class RaySamplingDataset(Dataset):
         if images.dtype == np.uint8:
             images = images.astype(np.float32) / 255
 
-        self.bounds = bounds
-        bounds_min = bounds @ np.array([-0.5, -0.5, -0.5, 1], np.float32)
-        bounds_max = bounds @ np.array([0.5, 0.5, 0.5, 1], np.float32)
-        self.bounds_min = bounds_min[np.newaxis, :3]
-        self.bounds_max = bounds_max[np.newaxis, :3]
-        self.label = label
         self.center_crop = False
         self.image_height, self.image_width = images.shape[1:3]
-        self.rays_per_camera = self.image_width * self.image_height
-        self.num_rays = len(cameras) * self.rays_per_camera
-        self.num_cameras = len(cameras)
-        self.num_samples = num_samples
-        print({
-            "width": self.image_width,
-            "height": self.image_height,
-            "rays_per_camera": self.rays_per_camera,
-            "num_cameras": self.num_cameras,
-            "num_rays": self.num_rays,
-            "num_samples": self.num_samples
-        })
         self.images = images
-        self.cameras = cameras
-        self.stratified = stratified
-        self.opacity_model = opacity_model
-        self.focus_sampling = opacity_model is not None
-        self.batch_size = batch_size
+        self.label = label
+        self.sampler = RaySampler(bounds, cameras, num_samples, stratified,
+                                  opacity_model, batch_size)
 
         source_resolution = np.array(images.shape[1:3])
 
@@ -309,47 +256,27 @@ class RaySamplingDataset(Dataset):
         crop_points = torch.from_numpy(crop_points)
         self.crop_rays_per_camera = len(crop_points)
 
-        num_focus_samples = num_samples - (num_samples // 2)
-
-        near_far = []
-        starts = []
-        directions = []
         colors = []
         alphas = []
         crop_index = []
-        cdfs = []
-        bar = ETABar("Loading {} data".format(label), max=len(cameras))
-        for camera, image in zip(cameras, images):
-            bar.next()
-            bar.info(camera.name)
-            cam_starts, cam_directions = camera.raycast(points)
-            cam_near_far = self._near_far(cam_starts, cam_directions)
-            cam_starts = torch.from_numpy(cam_starts)
-            cam_directions = torch.from_numpy(cam_directions)
-            cam_near_far = torch.from_numpy(cam_near_far)
-            cam_colors = image[points[:, 1], points[:, 0]]
-            cam_colors = torch.from_numpy(cam_colors)
-            if image.shape[-1] == 4:
-                colors.append(cam_colors[..., :3].reshape(-1, 3))
-                alphas.append(cam_colors[..., 3].reshape(-1))
-            else:
-                colors.append(cam_colors.reshape(-1, 3))
+        for image in images:
+            rgb = image[..., :3]
+            rgb = rgb[self.sampler.points[:, 1],
+                      self.sampler.points[:, 0]]
+            colors.append(torch.from_numpy(rgb))
 
-            starts.append(cam_starts)
-            directions.append(cam_directions)
-            near_far.append(cam_near_far)
-            crop_index.append(crop_points + len(crop_index) * len(points))
-            if self.focus_sampling:
-                t_values = _linspace(cam_near_far[0], cam_near_far[1],
-                                     num_focus_samples)
-                opacity = self._determine_opacity(t_values, cam_starts,
-                                                  cam_directions)
-                cdfs.append(_determine_cdf(t_values, opacity))
+            if image.shape[-1] == 4:
+                alpha = (image[..., 3] * 255).astype(np.uint8)
+                alpha = cv2.GaussianBlur(alpha, (0, 0), 4)
+                alpha = (alpha / 255).astype(np.float32)
+                alpha = alpha[self.sampler.points[:, 1],
+                              self.sampler.points[:, 0]]
+                alphas.append(torch.from_numpy(alpha))
+
+            offset = len(crop_index) * self.sampler.rays_per_camera
+            crop_index.append(crop_points + offset)
 
         self.crop_index = torch.cat(crop_index)
-        self.starts = torch.cat(starts)
-        self.directions = torch.cat(directions)
-        self.near_far = torch.cat(near_far, -1)
 
         if len(alphas) > 0:
             self.alphas = torch.cat(alphas)
@@ -358,59 +285,26 @@ class RaySamplingDataset(Dataset):
 
         self.colors = torch.cat(colors)
 
-        if self.focus_sampling:
-            self.cdfs = torch.cat(cdfs)
+    @property
+    def num_cameras(self) -> bool:
+        return self.sampler.num_cameras
 
-        bar.finish()
+    @property
+    def num_samples(self) -> int:
+        return self.sampler.num_samples
 
-    def _near_far(self, starts: np.ndarray,
-                  directions: np.ndarray) -> np.ndarray:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            test0 = (self.bounds_min - starts) / directions
-            test1 = (self.bounds_max - starts) / directions
+    @property
+    def cameras(self) -> List[CameraInfo]:
+        return self.sampler.cameras
 
-        near = np.where(test0 < test1, test0, test1)
-        far = np.where(test0 > test1, test0, test1)
-
-        near = near.max(-1)
-        far = far.min(-1)
-
-        valid = near < far
-        near[:] = np.maximum(0.1, near[valid].min())
-        far[:] = far[valid].max()
-        return np.stack([near, far])
-
-    def _determine_opacity(self, t_values: torch.Tensor,
-                           starts: torch.Tensor,
-                           directions: torch.Tensor) -> torch.Tensor:
-        num_rays = len(starts)
-        starts = starts.unsqueeze(1)
-        directions = directions.unsqueeze(1)
-        t_values = t_values.unsqueeze(2)
-        positions = starts + t_values * directions
-        device = next(self.opacity_model.parameters()).device
-        positions = positions.to(device)
-        opacity = []
-        with torch.no_grad():
-            for start in range(0, num_rays, self.batch_size):
-                end = min(start + self.batch_size, num_rays)
-                batch = positions[start:end]
-                batch = batch.reshape(-1, 3)
-                logits = self.opacity_model(batch)[:, -1]
-                opacity.append(F.softplus(logits))
-
-        opacity = torch.cat(opacity)
-        opacity = opacity.reshape(num_rays, -1).cpu()
-        return opacity
-
-    def rays_for_camera(self, camera: int) -> RaySamples:
-        """Returns the rays for the specified camera."""
+    def rays_for_camera(self, camera: int) -> RaySamplesEntry:
+        """Returns ray samples for the specified camera."""
         if self.center_crop:
             start = camera * self.crop_rays_per_camera
             end = start + self.crop_rays_per_camera
         else:
-            start = camera * self.rays_per_camera
-            end = start + self.rays_per_camera
+            start = camera * self.sampler.rays_per_camera
+            end = start + self.sampler.rays_per_camera
 
         return self[list(range(start, end))]
 
@@ -419,7 +313,7 @@ class RaySamplingDataset(Dataset):
         if self.center_crop:
             return len(self.crop_index)
 
-        return self.num_rays
+        return len(self.sampler)
 
     def subset(self, cameras: List[int],
                num_samples: int,
@@ -438,12 +332,12 @@ class RaySamplingDataset(Dataset):
         """
         return RaySamplingDataset(self.label,
                                   self.images[cameras],
-                                  self.bounds,
-                                  [self.cameras[i] for i in cameras],
+                                  self.sampler.bounds,
+                                  [self.sampler.cameras[i] for i in cameras],
                                   num_samples,
                                   stratified,
-                                  self.opacity_model,
-                                  self.batch_size)
+                                  self.sampler.opacity_model,
+                                  self.sampler.batch_size)
 
     def sample_cameras(self, num_cameras: int,
                        num_samples: int,
@@ -464,7 +358,7 @@ class RaySamplingDataset(Dataset):
         if self.num_cameras < num_cameras:
             samples = list(range(self.num_cameras))
         else:
-            positions = np.concatenate([cam.position for cam in self.cameras])
+            positions = np.concatenate([cam.position for cam in self.sampler.cameras])
             samples = set([0])
             all_directions = set(range(len(positions)))
             while len(samples) < num_cameras:
@@ -478,93 +372,28 @@ class RaySamplingDataset(Dataset):
 
         return self.subset(list(samples), num_samples, stratified)
 
-    def _sample_t_values(self, idx: List[int], num_samples: int) -> torch.Tensor:
-        num_rays = len(idx)
-
-        near, far = self.near_far[:, idx]
-        t_values = _linspace(near, far, num_samples)
-        t_values = 0.5 * (t_values[..., :-1] + t_values[..., 1:])
-
-        if self.stratified:
-            samples = torch.rand((num_rays, num_samples), dtype=torch.float32)
-        else:
-            samples = torch.linspace(0., 1., num_samples)
-            samples = samples.unsqueeze(0).repeat(num_rays, 1)
-
-        cdf = self.cdfs[idx]
-        index = torch.searchsorted(cdf, samples, right=True)
-        index_below = torch.maximum(torch.zeros_like(index), index - 1)
-        index_above = torch.minimum(torch.full_like(index, cdf.shape[-1] - 1),
-                                    index)
-        index_ba = torch.cat([index_below, index_above], -1)
-
-        cdf_ba = torch.gather(cdf, 1, index_ba)
-        cdf_ba = cdf_ba.reshape(num_rays, 2, num_samples)
-        t_values_ba = torch.gather(t_values, 1, index_ba)
-        t_values_ba = t_values_ba.reshape(num_rays, 2, num_samples)
-
-        denominator = cdf_ba[:, 1] - cdf_ba[:, 0]
-        denominator = torch.where(denominator < 1e-5,
-                                  torch.ones_like(denominator),
-                                  denominator)
-        t_diff = (samples - cdf_ba[:, 0]) / denominator
-        t_scale = t_values_ba[:, 1] - t_values_ba[:, 0]
-        samples = t_values_ba[:, 0] + t_diff * t_scale
-
-        return samples
-
-    def __getitem__(self, idx: Union[List[int], torch.Tensor]) -> RaySamples:
-        """Returns the requested sampled rays."""
+    def __getitem__(self,
+                    idx: Union[List[int], torch.Tensor]) -> RaySamplesEntry:
+        """Returns samples from the selected rays."""
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
         if self.center_crop:
             idx = self.crop_index[idx].tolist()
 
-        if isinstance(idx, list):
-            num_rays = len(idx)
-        else:
-            num_rays = 1
+        if not isinstance(idx, list):
             idx = [idx]
 
-        starts = self.starts[idx]
-        directions = self.directions[idx]
-
-        if self.focus_sampling:
-            num_samples = self.num_samples // 2
-        else:
-            num_samples = self.num_samples
-
-        near, far = self.near_far[:, idx]
-        t_values = _linspace(near, far, num_samples)
-        if self.stratified:
-            scale = (far - near) / num_samples
-            permute = torch.rand((num_rays, num_samples),
-                                 dtype=torch.float32)
-            permute = permute * scale.unsqueeze(-1)
-            t_values = t_values + permute
-
-        if self.focus_sampling:
-            num_focus_samples = self.num_samples - num_samples
-            focus_t_values = self._sample_t_values(idx, num_focus_samples)
-            t_values = torch.cat([t_values, focus_t_values], -1)
-            t_values, _ = t_values.sort(-1)
-
-        starts = starts.reshape(num_rays, 1, 3)
-        directions = directions.reshape(num_rays, 1, 3)
-        directions = directions.repeat(1, self.num_samples, 1)
-        positions = starts + t_values.unsqueeze(-1) * directions
-
+        samples = self.sampler[idx]
         colors = self.colors[idx]
         if self.alphas is None:
             alphas = None
         else:
             alphas = self.alphas[idx]
 
-        ray_samples = RaySamples(positions, directions, colors,
-                                 alphas, t_values)
-        ray_samples = ray_samples.pin_memory()
-        return ray_samples
+        entry = RaySamplesEntry(samples, colors, alphas)
+        entry = entry.pin_memory()
+        return entry
 
     @staticmethod
     def load(path: str, split: str, num_samples: int, stratified: bool,
@@ -648,9 +477,9 @@ class RaySamplingDataset(Dataset):
                                         height=height)
         canvas.shading = sp.Shading(sp.Colors.Gray)
 
-        idx = np.arange(len(self.cameras))
+        idx = np.arange(len(self.sampler.cameras))
         images = self.images
-        cameras = self.cameras
+        cameras = self.sampler.cameras
 
         cmap = get_cmap("jet")
         camera_colors = cmap(np.linspace(0, 1, len(cameras)))[:, :3]
@@ -684,7 +513,7 @@ class RaySamplingDataset(Dataset):
         bar = ETABar("Sampling Rays", max=self.num_cameras)
 
         bounds = scene.create_mesh("bounds", layer_id="bounds")
-        bounds.add_cube(sp.Colors.Blue, transform=self.bounds)
+        bounds.add_cube(sp.Colors.Blue, transform=self.sampler.bounds)
 
         frame = canvas.create_frame()
         frame.add_mesh(frustums)
@@ -695,13 +524,13 @@ class RaySamplingDataset(Dataset):
 
         for i in idx:
             bar.next()
-            camera = self.cameras[i]
-            ray_samples = self.rays_for_camera(i)
-            ray_samples = ray_samples.subset(index)
+            camera = self.sampler.cameras[i]
+            entry = self.rays_for_camera(i)
+            entry = entry.subset(index)
 
-            colors = ray_samples.colors.unsqueeze(1)
+            colors = entry.colors.unsqueeze(1)
             colors = colors.expand(-1, self.num_samples, -1)
-            positions = ray_samples.positions.numpy().reshape(-1, 3)
+            positions = entry.samples.positions.numpy().reshape(-1, 3)
             colors = colors.numpy().copy().reshape(-1, 3)
 
             empty = (colors == 0).sum(-1) == 3

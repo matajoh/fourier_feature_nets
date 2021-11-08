@@ -164,6 +164,7 @@ class PositionalFourierMLP(FourierFeatureMLP):
 
     @staticmethod
     def encoding(max_log_scale: float, embedding_size: int, num_inputs: int):
+        embedding_size = embedding_size // num_inputs
         frequencies_matrix = [math.pow(max_log_scale, j / embedding_size)
                               for j in range(embedding_size)]
         frequencies_matrix = torch.FloatTensor(frequencies_matrix)
@@ -309,19 +310,31 @@ class Voxels(nn.Module):
 
         voxels = torch.zeros((1, 4, side, side, side), dtype=torch.float32)
         self.voxels = nn.Parameter(voxels)
+        half = side // 2
+        view_voxels = torch.zeros((1, 3, half, half, half), dtype=torch.float32)
+        self.view_voxels = nn.Parameter(view_voxels)
         bias = torch.zeros(4, dtype=torch.float32)
         bias[:3] = torch.logit(torch.FloatTensor([1e-5, 1e-5, 1e-5]))
         bias[3] = -2
         self.bias = nn.Parameter(bias.unsqueeze(0))
         self.scale = scale
 
-    def forward(self, positions: torch.Tensor) -> torch.Tensor:
+    def forward(self, positions: torch.Tensor,
+                view_directions: torch.Tensor) -> torch.Tensor:
         positions = positions.reshape(1, -1, 1, 1, 3)
         positions = positions / self.scale
         output = F.grid_sample(self.voxels, positions,
                                padding_mode="border", align_corners=False)
         output = output.transpose(1, 2)
         output = output.reshape(-1, 4)
+
+        view_directions = view_directions.reshape(1, -1, 1, 1, 3)
+        output_view = F.grid_sample(self.view_voxels, view_directions,
+                                    padding_mode="border", align_corners=False)
+        output_view = output_view.transpose(1, 2)
+        output_view = output_view.reshape(-1, 3)
+
+        output[:, :3] += output_view
         output = output + self.bias
         return output
 

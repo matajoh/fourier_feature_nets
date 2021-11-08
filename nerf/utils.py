@@ -94,3 +94,9 @@ def download_asset(name: str, output_path: str) -> bool:
 
     bar.finish()
     return True
+
+
+def linspace(start: torch.Tensor, stop: torch.Tensor, num_samples: int):
+    diff = stop - start
+    samples = torch.linspace(0, 1, num_samples)
+    return start.unsqueeze(-1) + samples.unsqueeze(0) * diff.unsqueeze(-1)

@@ -18,7 +18,7 @@ except ImportError:
     Run = None
     print("Unable to import AzureML, running as local experiment")
 
-from .datasets import RaySamples, RaySamplingDataset
+from .datasets import RaySamples, RaySamplesEntry, RaySamplingDataset
 from .utils import calculate_blend_weights, ETABar
 
 
@@ -32,18 +32,21 @@ LogEntry = NamedTuple("LogEntry", [("step", int), ("timestamp", float),
 class Raycaster(nn.Module):
     """Implementation of a volumetric raycaster."""
 
-    def __init__(self, model: nn.Module, use_view=False):
+    def __init__(self, model: nn.Module, use_view=False, alpha_weight=0.1):
         """Constructor.
 
         Args:
             model (nn.Module): The model used to predict color and opacity.
             use_view (bool, optional): Whether to pass view information to
                                        the model. Defaults to False.
+            alpha_weight (float, optional): weight for the alpha term of the
+                                            loss
         """
         nn.Module.__init__(self)
         self.model = model
         self._use_alpha = False
         self._use_view = use_view
+        self._alpha_weight = alpha_weight
 
     def render(self, ray_samples: RaySamples,
                include_depth=False) -> RenderResult:
@@ -89,25 +92,29 @@ class Raycaster(nn.Module):
 
         return RenderResult(output_color, output_alpha, output_depth)
 
-    def _loss(self, ray_samples: RaySamples) -> torch.Tensor:
+    def _loss(self, entry: RaySamplesEntry) -> torch.Tensor:
         device = next(self.model.parameters()).device
-        ray_samples = ray_samples.to(device)
+        entry = entry.to(device)
 
-        colors, alphas, _ = self.render(ray_samples)
-        loss = (colors - ray_samples.colors).square().mean()
-        if self._use_alpha:
-            loss += (alphas - ray_samples.alphas).square().mean()
+        colors, alphas, _ = self.render(entry.samples)
+        color_loss = (colors - entry.colors).square().mean()
+        if self._use_alpha and self._alpha_weight:
+            alpha_loss = (alphas - entry.alphas).square().mean()
+        else:
+            alpha_loss = 0
 
+        loss = color_loss + self._alpha_weight * alpha_loss
         return loss
 
     def _render_eval_image(self, dataset: RaySamplingDataset, step: int,
                            batch_size: int, results_dir: str,
                            index: int):
+        self.model.eval()
         with torch.no_grad():
             index = index % dataset.num_cameras
             device = next(self.model.parameters()).device
             image_rays = dataset.rays_for_camera(index)
-            num_rays = len(image_rays.positions)
+            num_rays = len(image_rays.samples.positions)
             predicted = []
             actual = []
             depth = []
@@ -117,62 +124,63 @@ class Raycaster(nn.Module):
             for start in range(0, num_rays, batch_size):
                 end = min(start + batch_size, num_rays)
                 idx = list(range(start, end))
-                ray_samples = image_rays.subset(idx)
-                ray_samples = ray_samples.to(device)
-                pred_colors, pred_alphas, pred_depth = self.render(ray_samples, True)
-                pred_colors = pred_colors.cpu().numpy()
-                act_colors = ray_samples.colors.cpu().numpy()
+                entry = image_rays.subset(idx)
+                entry = entry.to(device)
+                pred = self.render(entry.samples, True)
+                pred_colors = pred.color.cpu().numpy()
+                act_colors = entry.colors.cpu().numpy()
                 pred_error = np.square(act_colors - pred_colors).sum(-1) / 3
                 if self._use_alpha:
-                    pred_alphas = pred_alphas.cpu().numpy()
-                    act_alphas = ray_samples.alphas.cpu().numpy()
+                    pred_alphas = pred.alpha.cpu().numpy()
+                    act_alphas = entry.alphas.cpu().numpy()
                     pred_error = 3 * pred_error
-                    pred_error += np.square(act_alphas - pred_alphas)
+                    pred_error += np.square(act_alphas - pred_alphas) * self._alpha_weight
                     pred_error /= 4
 
                 loss.append(np.mean(pred_error).item())
                 predicted.append(pred_colors)
                 actual.append(act_colors)
-                depth.append(pred_depth.clamp(0, max_depth).cpu().numpy())
+                depth.append(pred.depth.clamp(0, max_depth).cpu().numpy())
                 error.append(pred_error)
 
-            loss = np.mean(loss)
-            psnr = -10. * np.log10(loss)
+        self.model.train()
+        loss = np.mean(loss)
+        psnr = -10. * np.log10(loss)
 
-            width, height = dataset.image_width, dataset.image_height
-            predicted = np.concatenate(predicted)
-            predicted = np.clip(predicted, 0, 1)
-            predicted = predicted.reshape(height, width, 3)
-            predicted = (predicted * 255).astype(np.uint8)
+        width, height = dataset.image_width, dataset.image_height
+        predicted = np.concatenate(predicted)
+        predicted = np.clip(predicted, 0, 1)
+        predicted = predicted.reshape(height, width, 3)
+        predicted = (predicted * 255).astype(np.uint8)
 
-            actual = np.concatenate(actual)
-            actual = actual.reshape(height, width, 3)
-            actual = (actual * 255).astype(np.uint8)
+        actual = np.concatenate(actual)
+        actual = actual.reshape(height, width, 3)
+        actual = (actual * 255).astype(np.uint8)
 
-            depth = np.concatenate(depth)
-            depth = np.clip(depth, 0, max_depth)
-            depth = (depth / max_depth).reshape(height, width, 1)
-            depth = (depth * 255).astype(np.uint8)
+        depth = np.concatenate(depth)
+        depth = np.clip(depth, 0, max_depth)
+        depth = (depth / max_depth).reshape(height, width, 1)
+        depth = (depth * 255).astype(np.uint8)
 
-            error = np.concatenate(error)
-            error = np.sqrt(error)
-            error = (error / error.max()).reshape(height, width, 1)
-            error = (error * 255).astype(np.uint8)
+        error = np.concatenate(error)
+        error = np.sqrt(error)
+        error = (error / error.max()).reshape(height, width, 1)
+        error = (error * 255).astype(np.uint8)
 
-            name = "s{:07}_c{:03}.png".format(step, index)
-            image_dir = os.path.join(results_dir, dataset.label)
-            if not os.path.exists(image_dir):
-                os.makedirs(image_dir)
+        name = "s{:07}_c{:03}.png".format(step, index)
+        image_dir = os.path.join(results_dir, dataset.label)
+        if not os.path.exists(image_dir):
+            os.makedirs(image_dir)
 
-            image_path = os.path.join(image_dir, name)
+        image_path = os.path.join(image_dir, name)
 
-            compare = np.zeros((height*2, width*2, 3), np.uint8)
-            compare[:height, :width] = predicted
-            compare[height:, :width] = actual
-            compare[:height, width:] = depth
-            compare[height:, width:] = error
-            cv2.imwrite(image_path, compare[:, :, ::-1])
-            return psnr
+        compare = np.zeros((height*2, width*2, 3), np.uint8)
+        compare[:height, :width] = predicted
+        compare[height:, :width] = actual
+        compare[:height, width:] = depth
+        compare[height:, width:] = error
+        cv2.imwrite(image_path, compare[:, :, ::-1])
+        return psnr
 
     def fit(self, train_dataset: RaySamplingDataset,
             val_dataset: RaySamplingDataset,
@@ -233,18 +241,18 @@ class Raycaster(nn.Module):
 
                 end = min(start + batch_size, num_rays)
                 batch = index[start:end].tolist()
-                ray_samples = train_dataset[batch]
+                entry = train_dataset[batch]
                 optim.zero_grad()
-                loss = self._loss(ray_samples)
+                loss = self._loss(entry)
                 loss.backward()
                 optim.step()
 
                 if step and step % reporting_interval == 0:
                     val_psnr = self._render_eval_image(val_dataset, step,
-                                                       4 * batch_size,
+                                                       batch_size,
                                                        results_dir, render_index)
                     train_psnr = self._render_eval_image(trainval_dataset, step,
-                                                         4 * batch_size,
+                                                         batch_size,
                                                          results_dir, render_index)
                     current_time = time.time()
                     time_per_step = (current_time - timestamp) / reporting_interval

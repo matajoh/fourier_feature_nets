@@ -42,7 +42,7 @@ def _main():
                                          dataset.num_samples,
                                          False)
 
-    raycaster = nerf.Raycaster(model, isinstance(model, nerf.NeRF))
+    raycaster = nerf.Raycaster(model, isinstance(model, [nerf.NeRF, nerf.Voxels]))
     raycaster.to("cuda")
     num_rays = len(dataset)
     colors = []
