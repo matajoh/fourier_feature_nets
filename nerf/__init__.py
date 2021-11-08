@@ -1,7 +1,11 @@
 """Module created for [my NeRF lecture]."""
 
 from .camera_info import CameraInfo
-from .datasets import PixelDataset, RaySamples, RaySamplingDataset
+from .datasets import (
+    PixelDataset,
+    RaySamplesEntry,
+    RayDataset
+)
 from .models import (
     BasicFourierMLP,
     GaussianFourierMLP,
@@ -14,8 +18,7 @@ from .models import (
 )
 from .octree import OcTree
 from .raycaster import Raycaster
-from .raysampler import RaySampler
-from .triangulation import Triangulation
+from .raysampler import RaySampler, RaySamples
 from .utils import ETABar
 
 __all__ = ["CameraInfo",
@@ -34,5 +37,6 @@ __all__ = ["CameraInfo",
            "Raycaster",
            "RaySampler",
            "RaySamples",
-           "RaySamplingDataset",
+           "RaySamplesEntry",
+           "RayDataset",
            "Triangulation"]

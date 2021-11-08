@@ -33,7 +33,7 @@ def _main():
     if model is None:
         return 1
 
-    dataset = nerf.RaySamplingDataset.load(args.data_path, "train", 400, 128, False)
+    dataset = nerf.RayDataset.load(args.data_path, "train", 400, 128, False)
     if dataset is None:
         return 1
 

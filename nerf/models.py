@@ -63,6 +63,7 @@ class FourierFeatureMLP(nn.Module):
                 torch.nn.init.normal_(layer.bias)
 
         self.layers = nn.Sequential(*layers)
+        self.use_view = False
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         """Predicts outputs from the provided uv input."""
@@ -224,6 +225,7 @@ class NeRF(nn.Module):
         self.view_encoding = nn.Parameter(view_encoding, requires_grad=False)
         self.skips = set(skips)
         self.include_inputs = include_inputs
+        self.use_view = True
 
         self.layers = nn.ModuleList()
         num_inputs = 2 * self.pos_encoding.shape[-1]
@@ -315,6 +317,7 @@ class Voxels(nn.Module):
         bias[3] = -2
         self.bias = nn.Parameter(bias.unsqueeze(0))
         self.scale = scale
+        self.use_view = False
 
     def forward(self, positions: torch.Tensor) -> torch.Tensor:
         positions = positions.reshape(1, -1, 1, 1, 3)

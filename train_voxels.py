@@ -41,10 +41,10 @@ def _main():
 
     model = nerf.Voxels(args.side, args.scale)
 
-    train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
-                                                 args.num_samples, True)
-    val_dataset = nerf.RaySamplingDataset.load(args.data_path, "val",
-                                               args.num_samples, False)
+    train_dataset = nerf.RayDataset.load(args.data_path, "train",
+                                         args.num_samples, True)
+    val_dataset = nerf.RayDataset.load(args.data_path, "val",
+                                       args.num_samples, False)
 
     if train_dataset is None:
         return 1

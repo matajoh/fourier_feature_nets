@@ -98,14 +98,14 @@ def _main():
         if step % args.report_interval == 0:
             with torch.no_grad():
                 output = model(dataset.val_uv)
-                psnr = dataset.psnr(output)
-                print("step", step, dataset.psnr(output))
+                psnr_val = dataset.psnr(output)
+                print("step", step, psnr_val)
                 frame[:, args.image_size:] = dataset.to_image(output)
                 image_path = os.path.join(args.results_dir,
                                           "val{:05}.png".format(step))
                 cv2.imwrite(image_path, frame)
                 if run:
-                    run.log("psnr", psnr)
+                    run.log("psnr_val", psnr_val)
 
                 if is_offline:
                     cv2.imshow("progress", frame)
@@ -119,7 +119,8 @@ def _main():
 
     with torch.no_grad():
         output = model(dataset.val_uv)
-        print("final", dataset.psnr(output))
+        psnr_val = dataset.psnr(output)
+        print("final", psnr_val)
         frame[:, args.image_size:] = dataset.to_image(output)
         image_path = os.path.join(args.results_dir,
                                   "val{:05}.png".format(args.num_steps))
@@ -132,7 +133,7 @@ def _main():
         final_path = os.path.join(args.results_dir, "superres.png")
         cv2.imwrite(final_path, image)
         if run:
-            run.log("psnr", psnr)
+            run.log("psnr_val", psnr_val)
 
         if is_offline:
             cv2.imshow("progress", frame)

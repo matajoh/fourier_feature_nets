@@ -1,6 +1,7 @@
 """Module providing dataset classes for use in training NeRF models."""
 
 from collections import namedtuple
+from enum import Enum
 import math
 import os
 from typing import List, NamedTuple, Union
@@ -203,8 +204,13 @@ class RaySamplesEntry(NamedTuple("RaySamplesEntry", [("samples", RaySamples),
                                alphas)
 
 
-class RaySamplingDataset(Dataset):
+class RayDataset(Dataset):
     """Dataset for sampling from rays cast into a volume."""
+
+    class Mode(Enum):
+        Full = 0
+        Sparse = 1
+        Center = 2
 
     def __init__(self, label: str, images: np.ndarray, bounds: np.ndarray,
                  cameras: List[CameraInfo], num_samples: int,
@@ -234,7 +240,7 @@ class RaySamplingDataset(Dataset):
         if images.dtype == np.uint8:
             images = images.astype(np.float32) / 255
 
-        self.center_crop = False
+        self.mode = RayDataset.Mode.Full
         self.image_height, self.image_width = images.shape[1:3]
         self.images = images
         self.label = label
@@ -256,9 +262,13 @@ class RaySamplingDataset(Dataset):
         crop_points = torch.from_numpy(crop_points)
         self.crop_rays_per_camera = len(crop_points)
 
+        sparse_points = torch.LongTensor(self._subsample_rays(128))
+        self.sparse_rays_per_camera = len(sparse_points)
+
         colors = []
         alphas = []
         crop_index = []
+        sparse_index = []
         for image in images:
             rgb = image[..., :3]
             rgb = rgb[self.sampler.points[:, 1],
@@ -275,8 +285,10 @@ class RaySamplingDataset(Dataset):
 
             offset = len(crop_index) * self.sampler.rays_per_camera
             crop_index.append(crop_points + offset)
+            sparse_index.append(sparse_points + offset)
 
         self.crop_index = torch.cat(crop_index)
+        self.sparse_index = torch.cat(sparse_index)
 
         if len(alphas) > 0:
             self.alphas = torch.cat(alphas)
@@ -299,25 +311,36 @@ class RaySamplingDataset(Dataset):
 
     def rays_for_camera(self, camera: int) -> RaySamplesEntry:
         """Returns ray samples for the specified camera."""
-        if self.center_crop:
+        if self.mode == RayDataset.Mode.Center:
             start = camera * self.crop_rays_per_camera
             end = start + self.crop_rays_per_camera
-        else:
+        elif self.mode == RayDataset.Mode.Sparse:
+            start = camera * self.sparse_rays_per_camera
+            end = camera * self.sparse_rays_per_camera
+        elif self.mode == RayDataset.Mode.Full:
             start = camera * self.sampler.rays_per_camera
             end = start + self.sampler.rays_per_camera
+        else:
+            raise NotImplementedError("Unsupported sampling mode")
 
         return self[list(range(start, end))]
 
     def __len__(self) -> int:
         """The number of rays in the dataset."""
-        if self.center_crop:
+        if self.mode == RayDataset.Mode.Center:
             return len(self.crop_index)
 
-        return len(self.sampler)
+        if self.mode == RayDataset.Mode.Sparse:
+            return len(self.sparse_index)
+
+        if self.mode == RayDataset.Mode.Full:
+            return len(self.sampler)
+
+        raise NotImplementedError("Unsupported sampling mode")
 
     def subset(self, cameras: List[int],
                num_samples: int,
-               stratified: bool) -> "RaySamplingDataset":
+               stratified: bool) -> "RayDataset":
         """Returns a subset of this dataset (by camera).
 
         Args:
@@ -328,20 +351,20 @@ class RaySamplingDataset(Dataset):
                                Defaults to False.
 
         Returns:
-            RaySamplingDataset: New dataset with the subset of cameras
+            RayDataset: New dataset with the subset of cameras
         """
-        return RaySamplingDataset(self.label,
-                                  self.images[cameras],
-                                  self.sampler.bounds,
-                                  [self.sampler.cameras[i] for i in cameras],
-                                  num_samples,
-                                  stratified,
-                                  self.sampler.opacity_model,
-                                  self.sampler.batch_size)
+        return RayDataset(self.label,
+                          self.images[cameras],
+                          self.sampler.bounds,
+                          [self.sampler.cameras[i] for i in cameras],
+                          num_samples,
+                          stratified,
+                          self.sampler.opacity_model,
+                          self.sampler.batch_size)
 
     def sample_cameras(self, num_cameras: int,
                        num_samples: int,
-                       stratified: bool) -> "RaySamplingDataset":
+                       stratified: bool) -> "RayDataset":
         """Samples cameras from the dataset and returns the subset.
 
         Description:
@@ -353,7 +376,7 @@ class RaySamplingDataset(Dataset):
             stratified (bool): Whether to use stratified sampling
 
         Returns:
-            RaySamplingDataset: a subset of the dataset with the sampled cameras
+            RayDataset: a subset of the dataset with the sampled cameras
         """
         if self.num_cameras < num_cameras:
             samples = list(range(self.num_cameras))
@@ -378,8 +401,10 @@ class RaySamplingDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        if self.center_crop:
+        if self.mode == RayDataset.Mode.Center:
             idx = self.crop_index[idx].tolist()
+        elif self.mode == RayDataset.Mode.Sparse:
+            idx = self.sparse_index[idx].tolist()
 
         if not isinstance(idx, list):
             idx = [idx]
@@ -398,7 +423,7 @@ class RaySamplingDataset(Dataset):
     @staticmethod
     def load(path: str, split: str, num_samples: int, stratified: bool,
              opacity_model: nn.Module = None,
-             batch_size=4096) -> "RaySamplingDataset":
+             batch_size=4096) -> "RayDataset":
         """Loads a dataset from an NPZ file.
 
         Description:
@@ -425,7 +450,7 @@ class RaySamplingDataset(Dataset):
                                         opacity model.
 
         Returns:
-            RaySamplingDataset: A dataset made from the camera and image data
+            RayDataset: A dataset made from the camera and image data
         """
         if not os.path.exists(path):
             path = os.path.join(os.path.dirname(__file__), "..", "data", path)
@@ -464,8 +489,19 @@ class RaySamplingDataset(Dataset):
                                      intr, extr)
                    for i, (intr, extr) in enumerate(zip(intrinsics,
                                                         extrinsics))]
-        return RaySamplingDataset(split, images, bounds, cameras, num_samples,
-                                  stratified, opacity_model, batch_size)
+        return RayDataset(split, images, bounds, cameras, num_samples,
+                          stratified, opacity_model, batch_size)
+
+    def _subsample_rays(self, resolution: int) -> List[int]:
+        num_x_samples = resolution * self.image_width // self.image_height
+        num_y_samples = resolution
+        x_vals = np.linspace(0, self.image_width - 1, num_x_samples) + 0.5
+        y_vals = np.linspace(0, self.image_height - 1, num_y_samples) + 0.5
+        x_vals, y_vals = np.meshgrid(x_vals.astype(np.int32),
+                                     y_vals.astype(np.int32))
+        index = y_vals.reshape(-1) * self.image_width + x_vals.reshape(-1)
+        index = index.tolist()
+        return index
 
     def to_scenepic(self, resolution=50) -> sp.Scene:
         """Creates a ray sampling visualization ScenePic for the dataset."""
@@ -499,14 +535,7 @@ class RaySamplingDataset(Dataset):
 
             frustums.add_camera_frustum(camera, color, depth=0.5, thickness=0.01)
 
-        num_x_samples = resolution * self.image_width // self.image_height
-        num_y_samples = resolution
-        x_vals = np.linspace(0, self.image_width - 1, num_x_samples) + 0.5
-        y_vals = np.linspace(0, self.image_height - 1, num_y_samples) + 0.5
-        x_vals, y_vals = np.meshgrid(x_vals.astype(np.int32),
-                                     y_vals.astype(np.int32))
-        index = y_vals.reshape(-1) * self.image_width + x_vals.reshape(-1)
-        index = index.tolist()
+        index = self._subsample_rays(resolution)
 
         bar.finish()
 

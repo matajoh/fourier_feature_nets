@@ -18,7 +18,11 @@ except ImportError:
     Run = None
     print("Unable to import AzureML, running as local experiment")
 
-from .datasets import RaySamples, RaySamplesEntry, RaySamplingDataset
+from .datasets import (
+    RaySamples,
+    RaySamplesEntry,
+    RayDataset
+)
 from .utils import calculate_blend_weights, ETABar
 
 
@@ -32,7 +36,7 @@ LogEntry = NamedTuple("LogEntry", [("step", int), ("timestamp", float),
 class Raycaster(nn.Module):
     """Implementation of a volumetric raycaster."""
 
-    def __init__(self, model: nn.Module, use_view=False, alpha_weight=0.1):
+    def __init__(self, model: nn.Module, alpha_weight=0.1):
         """Constructor.
 
         Args:
@@ -45,7 +49,7 @@ class Raycaster(nn.Module):
         nn.Module.__init__(self)
         self.model = model
         self._use_alpha = False
-        self._use_view = use_view
+        self._use_view = model.use_view
         self._alpha_weight = alpha_weight
 
     def render(self, ray_samples: RaySamples,
@@ -106,9 +110,10 @@ class Raycaster(nn.Module):
         loss = color_loss + self._alpha_weight * alpha_loss
         return loss
 
-    def _render_eval_image(self, dataset: RaySamplingDataset, step: int,
+    def _render_eval_image(self, dataset: RayDataset, step: int,
                            batch_size: int, results_dir: str,
                            index: int):
+        dataset.mode = RayDataset.Mode.Full
         self.model.eval()
         with torch.no_grad():
             index = index % dataset.num_cameras
@@ -178,8 +183,9 @@ class Raycaster(nn.Module):
         cv2.imwrite(image_path, compare[:, :, ::-1])
 
     def _validate(self,
-                  dataset: RaySamplingDataset,
+                  dataset: RayDataset,
                   batch_size: int) -> torch.Tensor:
+        dataset.mode = RayDataset.Mode.Sparse
         loss = []
         num_rays = len(dataset)
         self.model.eval()
@@ -197,8 +203,8 @@ class Raycaster(nn.Module):
         psnr = -10. * np.log10(loss)
         return psnr
 
-    def fit(self, train_dataset: RaySamplingDataset,
-            val_dataset: RaySamplingDataset,
+    def fit(self, train_dataset: RayDataset,
+            val_dataset: RayDataset,
             results_dir: str,
             batch_size: int,
             learning_rate: float,
@@ -209,8 +215,8 @@ class Raycaster(nn.Module):
         """Fits the volumetric model using the raycaster.
 
         Args:
-            train_dataset (RaySamplingDataset): The train dataset.
-            val_dataset (RaySamplingDataset): The validation dataset.
+            train_dataset (RayDataset): The train dataset.
+            val_dataset (RayDataset): The validation dataset.
             results_dir (str): The output directory for results images.
             batch_size (int): The ray batch size.
             learning_rate (float): Learning rate for the model.
@@ -238,14 +244,20 @@ class Raycaster(nn.Module):
                                                         False)
 
         optim = torch.optim.Adam(self.model.parameters(), learning_rate)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, "max")
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, "max",
+                                                               patience=5,
+                                                               verbose=True)
         step = 0
         start_time = time.time()
         timestamp = start_time
         log = []
         epoch = 0
         render_index = 0
-        train_dataset.center_crop = epoch < crop_epochs
+        if epoch < crop_epochs:
+            train_dataset.mode = RayDataset.Mode.Center
+        else:
+            train_dataset.mode = RayDataset.Mode.Full
+
         while step < num_steps:
             num_rays = len(train_dataset)
             index = np.arange(num_rays)
@@ -288,9 +300,9 @@ class Raycaster(nn.Module):
                     log.append(LogEntry(step, timestamp - start_time,
                                         train_psnr, val_psnr))
 
-                    if train_dataset.center_crop and epoch >= crop_epochs:
+                    if train_dataset.mode == RayDataset.Mode.Center and epoch >= crop_epochs:
                         print("Removing center crop...")
-                        train_dataset.center_crop = False
+                        train_dataset.mode = RayDataset.Mode.Full
                         step += 1
                         break
 
@@ -316,13 +328,13 @@ class Raycaster(nn.Module):
 
         return log
 
-    def to_scenepic(self, dataset: RaySamplingDataset, num_cameras=10,
+    def to_scenepic(self, dataset: RayDataset, num_cameras=10,
                     resolution=50, num_samples=64,
                     empty_threshold=0.1) -> sp.Scene:
         """Creates a scenepic displaying the state of the volumetric model.
 
         Args:
-            dataset (RaySamplingDataset): The dataset to use for visualization.
+            dataset (RayDataset): The dataset to use for visualization.
             num_cameras (int, optional): Number of cameras to show.
                                          Defaults to 10.
             resolution (int, optional): Resolution to use for ray sampling.

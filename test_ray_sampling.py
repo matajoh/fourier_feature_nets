@@ -2,7 +2,7 @@
 
 import argparse
 
-from nerf import load_model, RaySamplingDataset
+from nerf import load_model, RayDataset
 
 
 def _parse_args():
@@ -38,9 +38,9 @@ def _main():
     else:
         model = None
 
-    dataset = RaySamplingDataset.load(args.data_path, args.split,
-                                      args.num_samples, args.stratified, model,
-                                      args.batch_size)
+    dataset = RayDataset.load(args.data_path, args.split,
+                              args.num_samples, args.stratified, model,
+                              args.batch_size)
     if dataset is None:
         return 1
 

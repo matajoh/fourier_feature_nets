@@ -69,12 +69,12 @@ def _main():
     else:
         opacity_model = None
 
-    train_dataset = nerf.RaySamplingDataset.load(args.data_path, "train",
-                                                 args.num_samples, True,
-                                                 opacity_model, args.batch_size)
-    val_dataset = nerf.RaySamplingDataset.load(args.data_path, "val",
-                                               args.num_samples, False,
-                                               opacity_model, args.batch_size)
+    train_dataset = nerf.RayDataset.load(args.data_path, "train",
+                                         args.num_samples, True,
+                                         opacity_model, args.batch_size)
+    val_dataset = nerf.RayDataset.load(args.data_path, "val",
+                                       args.num_samples, False,
+                                       opacity_model, args.batch_size)
 
     if train_dataset is None:
         return 1

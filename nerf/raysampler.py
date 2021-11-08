@@ -176,13 +176,26 @@ class RaySampler:
         positions = starts + t_values * directions
         device = next(self.opacity_model.parameters()).device
         positions = positions.to(device)
+        if self.opacity_model.use_view:
+            views = directions.expand(-1, t_values.shape[1], -1)
+            views = views.to(device)
+        else:
+            views = None
+
         opacity = []
         with torch.no_grad():
             for start in range(0, num_rays, self.batch_size):
                 end = min(start + self.batch_size, num_rays)
-                batch = positions[start:end]
-                batch = batch.reshape(-1, 3)
-                logits = self.opacity_model(batch)[:, -1]
+                batch_pos = positions[start:end]
+                batch_pos = batch_pos.reshape(-1, 3)
+                batch_view = None
+                if self.opacity_model.use_view:
+                    batch_view = views[start:end]
+                    batch_view = batch_view.reshape(-1, 3)
+                    logits = self.opacity_model(batch_pos, batch_view)[:, -1]
+                else:
+                    logits = self.opacity_model(batch_pos)[:, -1]
+
                 opacity.append(F.softplus(logits))
 
         opacity = torch.cat(opacity)
