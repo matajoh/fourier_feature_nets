@@ -22,7 +22,10 @@ def _parse_args():
     parser.add_argument("--up-dir", default="y+", 
                         choices=["x+", "x-", "y+", "y-", "z+", "z-"],
                         help="The direction that is 'up'")
-    parser.add_argument("--alpha-thresh", type=float, default=0.1)
+    parser.add_argument("--alpha-thresh", type=float, default=0.3)
+    parser.add_argument("--framerate", type=float, default=15)
+    parser.add_argument("--background", type=int, default=0)
+    parser.add_argument("--batch_size", type=int, default=400*400)
     return parser.parse_args()
 
 
@@ -50,14 +53,18 @@ def _main():
         right_dir = np.array([1, 0, 0], np.float32)
         forward_dir = np.array([0, 0, -1], np.float32)
 
-    azimuth = np.linspace(0, 6*np.pi, args.num_frames)
-    altitude0 = np.linspace(-np.pi / 4, np.pi / 4, args.num_frames // 2)
-    altitude1 = np.linspace(np.pi / 4, 0,
+    azimuth = np.linspace(0, 4*np.pi, args.num_frames)
+    start_value = -np.pi / 12
+    mid_value = np.pi / 4
+    altitude0 = np.linspace(start_value, mid_value, args.num_frames // 2)
+    altitude1 = np.linspace(mid_value, start_value,
                             args.num_frames - args.num_frames // 2)
     altitude = np.concatenate([altitude0, altitude1])
-    distances0 = np.linspace(1.2 * args.distance, 0.8 * args.distance,
-                             args.num_frames // 2)
-    distances1 = np.linspace(0.8 * args.distance, 1.2 * args.distance,
+
+    start_value = 1.2 * args.distance
+    mid_value = 0.8 * args.distance
+    distances0 = np.linspace(start_value, mid_value, args.num_frames // 2)
+    distances1 = np.linspace(mid_value, start_value,
                              args.num_frames - args.num_frames // 2)
     distances = np.concatenate([distances0, distances1])
 
@@ -108,20 +115,32 @@ def _main():
     model = model.to("cuda")
     raycaster = nerf.Raycaster(model, isinstance(model, nerf.NeRF))
     sampler = nerf.RaySampler(bounds_transform, camera_info, 128, False, model)
-    with sp.VideoWriter(args.mp4_path, camera_info[0].resolution, rgb=True) as writer:
+    with sp.VideoWriter(args.mp4_path, camera_info[0].resolution, rgb=True,
+                        framerate=args.framerate) as writer:
         with torch.no_grad():
             for frame in range(args.num_frames):
                 samples = sampler.rays_for_camera(frame)
-                samples = samples.to("cuda")
-                render = raycaster.render(samples)
-                color = render.color.reshape(args.resolution,
-                                             args.resolution, 3)
-                color = (color.cpu().numpy() * 255).astype(np.uint8)
-                alpha = render.alpha.reshape(args.resolution,
-                                             args.resolution, 1)
-                alpha = alpha.cpu().numpy()
+
+                color = []
+                alpha = []
+                start = 0
+                num_rays = len(samples.positions)
+                for start in range(0, num_rays, args.batch_size):
+                    end = min(start + args.batch_size, num_rays)
+                    batch_samples = samples.subset(list(range(start, end)))
+                    batch_samples = batch_samples.to("cuda")
+                    render = raycaster.render(batch_samples)
+                    color.append(render.color.cpu().numpy())
+                    alpha.append(render.alpha.cpu().numpy())
+
+                color = np.concatenate(color)
+                color = color.reshape(args.resolution, args.resolution, 3)
+                color = (color * 255).astype(np.uint8)
+
+                alpha = np.concatenate(alpha)
+                alpha = alpha.reshape(args.resolution, args.resolution, 1)
                 writer.frame[:] = np.where(alpha > args.alpha_thresh,
-                                           color, 255)
+                                           color, args.background)
                 writer.write_frame()
 
 

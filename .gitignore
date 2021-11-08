@@ -135,3 +135,4 @@ results
 config.json
 data/*.npz
 models
+*.mp4
