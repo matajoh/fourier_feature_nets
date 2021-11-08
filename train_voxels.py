@@ -23,8 +23,10 @@ def _parse_args():
     parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--num-steps", type=int, default=10000,
                         help="Number of steps to use for training.")
-    parser.add_argument("--report-interval", type=int, default=1000,
-                        help="Reporting interval for validation/logging")
+    parser.add_argument("--epoch-steps", type=int, default=1000,
+                        help="Interval for progress and lr decay")
+    parser.add_argument("--image-interval", type=int, default=2000,
+                        help="Image rendering interval")
     parser.add_argument("--seed", type=int, default=20080524,
                         help="Manual seed for the RNG")
     parser.add_argument("--use-alpha", action="store_true",
@@ -52,8 +54,10 @@ def _main():
 
     log = raycaster.fit(train_dataset, val_dataset, args.results_dir,
                         args.batch_size, args.learning_rate,
-                        args.num_steps, args.report_interval, 0)
+                        args.num_steps, args.image_interval, 0,
+                        args.epoch_steps)
 
+    model.save(os.path.join(args.results_dir, "voxels.pt"))
     with open(os.path.join(args.results_dir, "log.txt"), "w") as file:
         json.dump(vars(args), file)
         file.write("\n\n")
@@ -64,7 +68,6 @@ def _main():
 
     sp_path = os.path.join(args.results_dir, "voxels.html")
     raycaster.to_scenepic(val_dataset).save_as_html(sp_path)
-    model.save(os.path.join(args.results_dir, "voxels.pt"))
 
 
 if __name__ == "__main__":

@@ -30,8 +30,10 @@ def _parse_args():
                         help="Standard deviation for the gaussian encoding")
     parser.add_argument("--num-steps", type=int, default=50000,
                         help="Number of steps to use for training.")
-    parser.add_argument("--report-interval", type=int, default=1000,
-                        help="Reporting interval for validation/logging")
+    parser.add_argument("--epoch-steps", type=int, default=1000,
+                        help="Interval for progress and lr decay")
+    parser.add_argument("--image-interval", type=int, default=2000,
+                        help="Image rendering interval")
     parser.add_argument("--crop-epochs", type=int, default=1,
                         help="Number of epochs to train on center crops")
     parser.add_argument("--seed", type=int, default=20080524,
@@ -86,8 +88,10 @@ def _main():
 
     log = raycaster.fit(train_dataset, val_dataset, args.results_dir,
                         args.batch_size, args.learning_rate,
-                        args.num_steps, args.report_interval,
-                        args.crop_epochs)
+                        args.num_steps, args.image_interval,
+                        args.crop_epochs, args.epoch_steps)
+
+    model.save(os.path.join(args.results_dir, "tiny_nerf.pt"))
 
     with open(os.path.join(args.results_dir, "log.txt"), "w") as file:
         json.dump(vars(args), file)
@@ -97,7 +101,6 @@ def _main():
         for line in log:
             file.write("\t".join([str(val) for val in line]) + "\n")
 
-    model.save(os.path.join(args.results_dir, "tiny_nerf.pt"))
     sp_path = os.path.join(args.results_dir, "tiny_nerf.html")
     raycaster.to_scenepic(val_dataset).save_as_html(sp_path)
 

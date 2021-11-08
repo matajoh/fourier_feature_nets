@@ -357,6 +357,11 @@ def load_model(path: str):
     state_dict = torch.load(path)
     if state_dict["type"] == "fourier":
         model_class = FourierFeatureMLP
+        params = state_dict["params"]
+        if params["frequencies_matrix"] is not None:
+            frequencies_matrix = params["frequencies_matrix"]
+            frequencies_matrix = torch.FloatTensor(frequencies_matrix)
+            params["frequencies_matrix"] = frequencies_matrix
     elif state_dict["type"] == "nerf":
         model_class = NeRF
     elif state_dict["type"] == "voxels":

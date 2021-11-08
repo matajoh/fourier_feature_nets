@@ -25,7 +25,7 @@ def _parse_args():
     parser.add_argument("--alpha-thresh", type=float, default=0.3)
     parser.add_argument("--framerate", type=float, default=15)
     parser.add_argument("--background", type=int, default=0)
-    parser.add_argument("--batch_size", type=int, default=400*400)
+    parser.add_argument("--batch_size", type=int, default=4096)
     return parser.parse_args()
 
 
@@ -114,7 +114,8 @@ def _main():
     model = nerf.load_model(args.model_path)
     model = model.to("cuda")
     raycaster = nerf.Raycaster(model, isinstance(model, nerf.NeRF))
-    sampler = nerf.RaySampler(bounds_transform, camera_info, 128, False, model)
+    sampler = nerf.RaySampler(bounds_transform, camera_info, 128, False, model,
+                              args.batch_size)
     with sp.VideoWriter(args.mp4_path, camera_info[0].resolution, rgb=True,
                         framerate=args.framerate) as writer:
         with torch.no_grad():

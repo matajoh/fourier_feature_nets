@@ -119,7 +119,6 @@ class Raycaster(nn.Module):
             actual = []
             depth = []
             error = []
-            loss = []
             max_depth = 10
             for start in range(0, num_rays, batch_size):
                 end = min(start + batch_size, num_rays)
@@ -137,15 +136,12 @@ class Raycaster(nn.Module):
                     pred_error += np.square(act_alphas - pred_alphas) * self._alpha_weight
                     pred_error /= 4
 
-                loss.append(np.mean(pred_error).item())
                 predicted.append(pred_colors)
                 actual.append(act_colors)
                 depth.append(pred.depth.clamp(0, max_depth).cpu().numpy())
                 error.append(pred_error)
 
         self.model.train()
-        loss = np.mean(loss)
-        psnr = -10. * np.log10(loss)
 
         width, height = dataset.image_width, dataset.image_height
         predicted = np.concatenate(predicted)
@@ -180,6 +176,25 @@ class Raycaster(nn.Module):
         compare[:height, width:] = depth
         compare[height:, width:] = error
         cv2.imwrite(image_path, compare[:, :, ::-1])
+
+    def _validate(self,
+                  dataset: RaySamplingDataset,
+                  batch_size: int) -> torch.Tensor:
+        loss = []
+        num_rays = len(dataset)
+        self.model.eval()
+        with torch.no_grad():
+            for start in range(0, num_rays, batch_size):
+                if start + batch_size > num_rays:
+                    break
+
+                batch = list(range(start, start + batch_size))
+                entry = dataset[batch]
+                loss.append(self._loss(entry).item())
+
+        self.model.train()
+        loss = np.mean(loss)
+        psnr = -10. * np.log10(loss)
         return psnr
 
     def fit(self, train_dataset: RaySamplingDataset,
@@ -188,8 +203,9 @@ class Raycaster(nn.Module):
             batch_size: int,
             learning_rate: float,
             num_steps: int,
-            reporting_interval: int,
-            crop_epochs: int):
+            image_interval: int,
+            crop_epochs: int,
+            epoch_steps: int):
         """Fits the volumetric model using the raycaster.
 
         Args:
@@ -199,9 +215,11 @@ class Raycaster(nn.Module):
             batch_size (int): The ray batch size.
             learning_rate (float): Learning rate for the model.
             num_steps (int): Number of steps (i.e. batches) to use for training.
-            reporting_interval (int): Number of steps between logging and images
+            image_interval (int): Number of steps between logging and images
             crop_epochs (int): Number of epochs to use center-cropped data at
                                the beginning of training.
+            epoch_steps (int): Number of steps before reporting on progress
+                               and checking to decay the learning rate
 
         Returns:
             List[LogEntry]: logging information from the training run
@@ -220,18 +238,16 @@ class Raycaster(nn.Module):
                                                         False)
 
         optim = torch.optim.Adam(self.model.parameters(), learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, "max")
         step = 0
         start_time = time.time()
         timestamp = start_time
         log = []
         epoch = 0
         render_index = 0
+        train_dataset.center_crop = epoch < crop_epochs
         while step < num_steps:
-            train_dataset.center_crop = epoch < crop_epochs
             num_rays = len(train_dataset)
-            print("Epoch", epoch,
-                  " -- center_crop:", epoch < crop_epochs,
-                  "num_rays:", num_rays)
             index = np.arange(num_rays)
             np.random.shuffle(index)
 
@@ -247,15 +263,13 @@ class Raycaster(nn.Module):
                 loss.backward()
                 optim.step()
 
-                if step and step % reporting_interval == 0:
-                    val_psnr = self._render_eval_image(val_dataset, step,
-                                                       batch_size,
-                                                       results_dir, render_index)
-                    train_psnr = self._render_eval_image(trainval_dataset, step,
-                                                         batch_size,
-                                                         results_dir, render_index)
+                if step and step % epoch_steps == 0:
+                    epoch += 1
+                    train_psnr = self._validate(trainval_dataset, batch_size)
+                    val_psnr = self._validate(val_dataset, batch_size)
+                    scheduler.step(val_psnr)
                     current_time = time.time()
-                    time_per_step = (current_time - timestamp) / reporting_interval
+                    time_per_step = (current_time - timestamp) / epoch_steps
                     remaining_time = (num_steps - step) * time_per_step
                     eta = time.gmtime(current_time + remaining_time)
                     eta = time.strftime("%a, %d %b %Y %H:%M:%S +0000", eta)
@@ -263,23 +277,42 @@ class Raycaster(nn.Module):
                     print("{:07}".format(step),
                           "{:2f} s/step".format(time_per_step),
                           "psnr_train: {:2f}".format(train_psnr),
-                          "loss_train: {:2f}".format(loss.item()),
                           "val_psnr: {:2f}".format(val_psnr),
                           "eta:", eta)
 
                     if run:
                         run.log("psnr_train", train_psnr)
-                        run.log("loss_train", loss.item())
                         run.log("psnr_val", val_psnr)
                         run.log("time_per_step", time_per_step)
 
                     log.append(LogEntry(step, timestamp - start_time,
                                         train_psnr, val_psnr))
+
+                    if train_dataset.center_crop and epoch >= crop_epochs:
+                        print("Removing center crop...")
+                        train_dataset.center_crop = False
+                        step += 1
+                        break
+
+                if step and step % image_interval == 0:
+                    self._render_eval_image(val_dataset, step,
+                                            batch_size,
+                                            results_dir, render_index)
+                    self._render_eval_image(trainval_dataset, step,
+                                            batch_size,
+                                            results_dir, render_index)
                     render_index += 1
 
                 step += 1
 
             epoch += 1
+
+        self._render_eval_image(val_dataset, step,
+                                batch_size,
+                                results_dir, render_index)
+        self._render_eval_image(trainval_dataset, step,
+                                batch_size,
+                                results_dir, render_index)
 
         return log
 
@@ -346,8 +379,8 @@ class Raycaster(nn.Module):
         device = next(self.model.parameters()).device
         for i, camera in enumerate(dataset.cameras):
             bar.next()
-            ray_samples = dataset.rays_for_camera(i)
-            ray_samples = ray_samples.subset(index)
+            entry = dataset.rays_for_camera(i)
+            ray_samples = entry.samples.subset(index)
             ray_samples = ray_samples.to(device)
 
             with torch.no_grad():
