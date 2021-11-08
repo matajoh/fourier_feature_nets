@@ -267,7 +267,7 @@ class RaySamplingDataset(Dataset):
 
             if image.shape[-1] == 4:
                 alpha = (image[..., 3] * 255).astype(np.uint8)
-                alpha = cv2.GaussianBlur(alpha, (0, 0), 4)
+                alpha = cv2.GaussianBlur(alpha, (5, 5), 0)
                 alpha = (alpha / 255).astype(np.float32)
                 alpha = alpha[self.sampler.points[:, 1],
                               self.sampler.points[:, 0]]

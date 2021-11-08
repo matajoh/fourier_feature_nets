@@ -102,7 +102,12 @@ class RaySampler:
         self.cameras = cameras
         self.stratified = stratified
         self.opacity_model = opacity_model
-        self.focus_sampling = opacity_model is not None
+        if self.opacity_model is not None:
+            self.opacity_model.eval()
+            self.focus_sampling = True
+        else:
+            self.focus_sampling = False
+
         self.batch_size = batch_size
 
         x_vals = np.arange(self.image_width)

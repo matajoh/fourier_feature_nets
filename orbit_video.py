@@ -5,13 +5,14 @@ import argparse
 import nerf
 import numpy as np
 import scenepic as sp
+import torch
 
 
 def _parse_args():
     parser = argparse.ArgumentParser("Orbit Video Maker")
     parser.add_argument("model_path", help="Path to the trained model")
     parser.add_argument("resolution", type=int, help="Resolution of the video")
-    parser.add_argument("output_path", help="Path to the output MP4")
+    parser.add_argument("mp4_path", help="Path to the output MP4")
     parser.add_argument("--distance", type=int, default=4,
                         help="Distance of the camera")
     parser.add_argument("--fov-y-degrees", type=float, default=40,
@@ -19,8 +20,9 @@ def _parse_args():
     parser.add_argument("--num-frames", type=int, default=120,
                         help="Number of frames in the video")
     parser.add_argument("--up-dir", default="y+", 
-                        choices=["x+","x-","y+","y-","z+","z-"],
+                        choices=["x+", "x-", "y+", "y-", "z+", "z-"],
                         help="The direction that is 'up'")
+    parser.add_argument("--alpha-thresh", type=float, default=0.1)
     return parser.parse_args()
 
 
@@ -49,8 +51,8 @@ def _main():
         forward_dir = np.array([0, 0, -1], np.float32)
 
     azimuth = np.linspace(0, 6*np.pi, args.num_frames)
-    altitude0 = np.linspace(0, np.pi / 3, args.num_frames // 2)
-    altitude1 = np.linspace(np.pi / 3, 0,
+    altitude0 = np.linspace(-np.pi / 4, np.pi / 4, args.num_frames // 2)
+    altitude1 = np.linspace(np.pi / 4, 0,
                             args.num_frames - args.num_frames // 2)
     altitude = np.concatenate([altitude0, altitude1])
     distances0 = np.linspace(1.2 * args.distance, 0.8 * args.distance,
@@ -68,9 +70,11 @@ def _main():
         0, 0, 1
     ], np.float32).reshape(3, 3)
 
+    bounds_transform = sp.Transforms.scale(2)
+
     scene = sp.Scene()
     bounds = scene.create_mesh()
-    bounds.add_cube(sp.Colors.Blue)
+    bounds.add_cube(sp.Colors.Blue, transform=bounds_transform)
     canvas = scene.create_canvas_3d(width=800, height=800)
     camera_info = []
     for frame_azi, frame_alt, frame_dist in zip(azimuth, altitude, distances):
@@ -101,14 +105,24 @@ def _main():
     scene.save_as_html("orbit.html")
 
     model = nerf.load_model(args.model_path)
+    model = model.to("cuda")
     raycaster = nerf.Raycaster(model, isinstance(model, nerf.NeRF))
-    # need a RaySampler class which is used by Dataset and can be
-    # use here
-    with sp.VideoWriter() as writer:
-        # create ray samples for camera
-        # render samples with raycaster
-        # assemble into image
-        # write to frame
+    sampler = nerf.RaySampler(bounds_transform, camera_info, 128, False, model)
+    with sp.VideoWriter(args.mp4_path, camera_info[0].resolution, rgb=True) as writer:
+        with torch.no_grad():
+            for frame in range(args.num_frames):
+                samples = sampler.rays_for_camera(frame)
+                samples = samples.to("cuda")
+                render = raycaster.render(samples)
+                color = render.color.reshape(args.resolution,
+                                             args.resolution, 3)
+                color = (color.cpu().numpy() * 255).astype(np.uint8)
+                alpha = render.alpha.reshape(args.resolution,
+                                             args.resolution, 1)
+                alpha = alpha.cpu().numpy()
+                writer.frame[:] = np.where(alpha > args.alpha_thresh,
+                                           color, 255)
+                writer.write_frame()
 
 
 if __name__ == "__main__":
