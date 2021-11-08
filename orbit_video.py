@@ -101,7 +101,7 @@ def _main():
     scene.save_as_html("orbit.html")
 
     model = nerf.load_model(args.model_path)
-    raycaster = nerf.Raycaster(model, isinstance(model, [nerf.NeRF, nerf.Voxels]))
+    raycaster = nerf.Raycaster(model, isinstance(model, nerf.NeRF))
     # need a RaySampler class which is used by Dataset and can be
     # use here
     with sp.VideoWriter() as writer:
