@@ -64,7 +64,7 @@ ASSETS = {
     "matthew_400_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluIgx8sD53tY-i629A",
     "matthew_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluIep3ZQzMCB7Tdj1A",
     "lego_400_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluB7Bf3qx5P3h5V9CQ",
-    "lego_800_vox128.py": "https://1drv.ms/u/s!AnWvK2b51nGqluIdfgHB-jiKIvRxZQ"
+    "lego_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluIdfgHB-jiKIvRxZQ"
 }
 
 

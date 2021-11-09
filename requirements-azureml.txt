@@ -1,1 +1,2 @@
 azureml-core
+azureml-train
