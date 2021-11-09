@@ -245,7 +245,6 @@ class Raycaster(nn.Module):
 
         optim = torch.optim.Adam(self.model.parameters(), learning_rate)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, "max",
-                                                               patience=5,
                                                                verbose=True)
         step = 0
         start_time = time.time()
@@ -281,7 +280,7 @@ class Raycaster(nn.Module):
                     val_psnr = self._validate(val_dataset, batch_size)
                     scheduler.step(val_psnr)
                     current_time = time.time()
-                    time_per_step = (current_time - timestamp) / epoch_steps
+                    time_per_step = (current_time - start_time) / step
                     remaining_time = (num_steps - step) * time_per_step
                     eta = time.gmtime(current_time + remaining_time)
                     eta = time.strftime("%a, %d %b %Y %H:%M:%S +0000", eta)
