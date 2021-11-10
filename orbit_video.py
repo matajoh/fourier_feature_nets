@@ -17,11 +17,14 @@ def _parse_args():
                         help="Distance of the camera")
     parser.add_argument("--fov-y-degrees", type=float, default=40,
                         help="Camera field of view in degrees")
-    parser.add_argument("--num-frames", type=int, default=120,
+    parser.add_argument("--num-frames", type=int, default=200,
                         help="Number of frames in the video")
-    parser.add_argument("--up-dir", default="y+", 
-                        choices=["x+", "x-", "y+", "y-", "z+", "z-"],
+    parser.add_argument("--up-dir", default="y+",
+                        choices=list(VECTORS.keys()),
                         help="The direction that is 'up'")
+    parser.add_argument("--forward-dir", default="z+",
+                        choices=list(VECTORS.keys()),
+                        help="The direction that is 'forward'")
     parser.add_argument("--alpha-thresh", type=float, default=0.3)
     parser.add_argument("--framerate", type=float, default=15)
     parser.add_argument("--background", type=int, default=0)
@@ -29,7 +32,7 @@ def _parse_args():
     return parser.parse_args()
 
 
-UP_VECTORS = {
+VECTORS = {
     "x+": np.array([1, 0, 0], np.float32),
     "x-": np.array([-1, 0, 0], np.float32),
     "y+": np.array([0, 1, 0], np.float32),
@@ -42,31 +45,16 @@ UP_VECTORS = {
 def _main():
     args = _parse_args()
 
-    up_dir = UP_VECTORS[args.up_dir]
-    if args.up_dir.startswith("x"):
-        right_dir = np.array([0, 1, 0], np.float32)
-        forward_dir = np.array([0, 0, -1], np.float32)
-    elif args.up_dir.startswith("z"):
-        right_dir = np.array([0, 1, 0], np.float32)
-        forward_dir = np.array([0, -1, 0], np.float32)
-    else:
-        right_dir = np.array([1, 0, 0], np.float32)
-        forward_dir = np.array([0, 0, -1], np.float32)
-
+    up_dir = VECTORS[args.up_dir]
+    forward_dir = VECTORS[args.forward_dir]
+    right_dir = np.cross(up_dir, forward_dir)
     azimuth = np.linspace(0, 4*np.pi, args.num_frames)
-    start_value = -np.pi / 12
-    mid_value = np.pi / 4
+    start_value = np.pi / 12
+    mid_value = -np.pi / 3
     altitude0 = np.linspace(start_value, mid_value, args.num_frames // 2)
     altitude1 = np.linspace(mid_value, start_value,
                             args.num_frames - args.num_frames // 2)
     altitude = np.concatenate([altitude0, altitude1])
-
-    start_value = 1.2 * args.distance
-    mid_value = 0.8 * args.distance
-    distances0 = np.linspace(start_value, mid_value, args.num_frames // 2)
-    distances1 = np.linspace(mid_value, start_value,
-                             args.num_frames - args.num_frames // 2)
-    distances = np.concatenate([distances0, distances1])
 
     fov_y = args.fov_y_degrees * np.pi / 180
     focal_length = .5 * args.resolution / np.tan(.5 * fov_y)
@@ -84,9 +72,9 @@ def _main():
     bounds.add_cube(sp.Colors.Blue, transform=bounds_transform)
     canvas = scene.create_canvas_3d(width=800, height=800)
     camera_info = []
-    for frame_azi, frame_alt, frame_dist in zip(azimuth, altitude, distances):
+    for frame_azi, frame_alt in zip(azimuth, altitude):
         frame = canvas.create_frame()
-        position = forward_dir * frame_dist
+        position = -forward_dir * args.distance
         elevate = sp.Transforms.rotation_matrix_from_axis_angle(right_dir,
                                                                 frame_alt)
         rotate = sp.Transforms.rotation_matrix_from_axis_angle(up_dir,

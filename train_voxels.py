@@ -13,8 +13,6 @@ def _parse_args():
     parser.add_argument("data_path", help="Path to the data NPZ")
     parser.add_argument("side", type=int, help="One side of the voxel volume")
     parser.add_argument("results_dir", help="Path to output results")
-    parser.add_argument("--scale", type=float, default=2,
-                        help="Scale of the volume")
     parser.add_argument("--num-samples", type=int, default=256,
                         help="Number of samples to take")
     parser.add_argument("--num-cameras", type=int, default=100,
@@ -39,12 +37,13 @@ def _main():
 
     torch.manual_seed(args.seed)
 
-    model = nerf.Voxels(args.side, args.scale)
-
     train_dataset = nerf.RayDataset.load(args.data_path, "train",
                                          args.num_samples, True)
     val_dataset = nerf.RayDataset.load(args.data_path, "val",
                                        args.num_samples, False)
+
+    scale = 2 / train_dataset.sampler.bounds[0, 0]
+    model = nerf.Voxels(args.side, scale)
 
     if train_dataset is None:
         return 1
