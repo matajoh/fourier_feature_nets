@@ -20,8 +20,10 @@ from .octree import OcTree
 from .raycaster import Raycaster
 from .raysampler import RaySampler, RaySamples
 from .utils import ETABar
+from .version import __version__
 
-__all__ = ["CameraInfo",
+__all__ = ["__version__",
+           "CameraInfo",
            "CameraTransform",
            "ETABar",
            "MLP",

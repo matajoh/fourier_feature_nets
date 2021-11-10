@@ -40,6 +40,8 @@ def _parse_args():
                         help="Manual seed for the RNG")
     parser.add_argument("--use-alpha", action="store_true",
                         help="Whether to use the alpha channel as a target")
+    parser.add_argument("--color-space", choices=["YCrCb", "RGB"],
+                        default="RGB")
     return parser.parse_args()
 
 
@@ -74,11 +76,13 @@ def _main():
     train_dataset = nerf.RayDataset.load(args.data_path, "train",
                                          args.num_samples, True,
                                          opacity_model,
-                                         args.batch_size)
+                                         args.batch_size,
+                                         args.color_space)
     val_dataset = nerf.RayDataset.load(args.data_path, "val",
                                        args.num_samples, False,
                                        opacity_model,
-                                       args.batch_size)
+                                       args.batch_size,
+                                       args.color_space)
 
     if train_dataset is None:
         return 1

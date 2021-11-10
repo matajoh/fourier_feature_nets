@@ -36,7 +36,7 @@ LogEntry = NamedTuple("LogEntry", [("step", int), ("timestamp", float),
 class Raycaster(nn.Module):
     """Implementation of a volumetric raycaster."""
 
-    def __init__(self, model: nn.Module, alpha_weight=0.1):
+    def __init__(self, model: nn.Module, alpha_weight=1e-3):
         """Constructor.
 
         Args:
@@ -150,9 +150,7 @@ class Raycaster(nn.Module):
 
         width, height = dataset.image_width, dataset.image_height
         predicted = np.concatenate(predicted)
-        predicted = np.clip(predicted, 0, 1)
-        predicted = predicted.reshape(height, width, 3)
-        predicted = (predicted * 255).astype(np.uint8)
+        predicted = dataset.to_image(np.clip(predicted, 0, 1))
 
         actual = np.concatenate(actual)
         actual = actual.reshape(height, width, 3)

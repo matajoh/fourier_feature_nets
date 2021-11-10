@@ -215,7 +215,7 @@ class RayDataset(Dataset):
     def __init__(self, label: str, images: np.ndarray, bounds: np.ndarray,
                  cameras: List[CameraInfo], num_samples: int,
                  stratified=False, opacity_model: nn.Module = None,
-                 batch_size=4096):
+                 batch_size=4096, color_space="RGB"):
         """Constructor.
 
         Args:
@@ -237,9 +237,9 @@ class RayDataset(Dataset):
         """
         assert len(images.shape) == 4
         assert len(images) == len(cameras)
-        if images.dtype == np.uint8:
-            images = images.astype(np.float32) / 255
+        assert images.dtype == np.uint8
 
+        self.color_space = color_space
         self.mode = RayDataset.Mode.Full
         self.image_height, self.image_width = images.shape[1:3]
         self.images = images
@@ -270,15 +270,17 @@ class RayDataset(Dataset):
         crop_index = []
         sparse_index = []
         for image in images:
-            rgb = image[..., :3]
-            rgb = rgb[self.sampler.points[:, 1],
-                      self.sampler.points[:, 0]]
-            colors.append(torch.from_numpy(rgb))
+            color = image[..., :3]
+            if color_space == "YCrCb":
+                color = cv2.cvtColor(color, cv2.COLOR_RGB2YCrCb)
+
+            color = color.astype(np.float32) / 255
+            color = color[self.sampler.points[:, 1],
+                          self.sampler.points[:, 0]]
+            colors.append(torch.from_numpy(color))
 
             if image.shape[-1] == 4:
-                alpha = (image[..., 3] * 255).astype(np.uint8)
-                alpha = cv2.GaussianBlur(alpha, (5, 5), 0)
-                alpha = (alpha / 255).astype(np.float32)
+                alpha = image[..., 3].astype(np.float32) / 255
                 alpha = alpha[self.sampler.points[:, 1],
                               self.sampler.points[:, 0]]
                 alphas.append(torch.from_numpy(alpha))
@@ -296,6 +298,16 @@ class RayDataset(Dataset):
             self.alphas = None
 
         self.colors = torch.cat(colors)
+
+    def to_image(self, colors: np.ndarray) -> np.ndarray:
+        pixels = colors.reshape(self.image_height, self.image_width, 3)
+        pixels = (pixels * 255).astype(np.uint8)
+        if self.color_space == "YCrCb":
+            pixels = cv2.cvtColor(pixels, cv2.COLOR_YCrCB2BGR)
+        else:
+            pixels = cv2.cvtColor(pixels, cv2.COLOR_RGB2BGR)
+
+        return pixels
 
     @property
     def num_cameras(self) -> bool:
@@ -360,7 +372,8 @@ class RayDataset(Dataset):
                           num_samples,
                           stratified,
                           self.sampler.opacity_model,
-                          self.sampler.batch_size)
+                          self.sampler.batch_size,
+                          self.color_space)
 
     def sample_cameras(self, num_cameras: int,
                        num_samples: int,
@@ -423,7 +436,7 @@ class RayDataset(Dataset):
     @staticmethod
     def load(path: str, split: str, num_samples: int, stratified: bool,
              opacity_model: nn.Module = None,
-             batch_size=4096) -> "RayDataset":
+             batch_size=4096, color_space="RGB") -> "RayDataset":
         """Loads a dataset from an NPZ file.
 
         Description:
@@ -490,7 +503,8 @@ class RayDataset(Dataset):
                    for i, (intr, extr) in enumerate(zip(intrinsics,
                                                         extrinsics))]
         return RayDataset(split, images, bounds, cameras, num_samples,
-                          stratified, opacity_model, batch_size)
+                          stratified, opacity_model, batch_size,
+                          color_space)
 
     def _subsample_rays(self, resolution: int) -> List[int]:
         num_x_samples = resolution * self.image_width // self.image_height
@@ -562,7 +576,14 @@ class RayDataset(Dataset):
             positions = entry.samples.positions.numpy().reshape(-1, 3)
             colors = colors.numpy().copy().reshape(-1, 3)
 
-            empty = (colors == 0).sum(-1) == 3
+            if entry.alphas is not None:
+                alphas = entry.alphas.unsqueeze(1)
+                alphas = alphas.expand(-1, self.num_samples)
+                alphas = alphas.reshape(-1)
+                empty = (alphas < 0.1).numpy()
+            else:
+                empty = np.zeros_like(colors[..., 0])
+
             not_empty = np.logical_not(empty)
 
             samples = scene.create_mesh()
