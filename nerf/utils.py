@@ -54,9 +54,17 @@ def calculate_blend_weights(t_values: torch.Tensor,
 
 ASSETS = {
     "antinous_400.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluBagOAnmTej7LJb_Q",
+    "dinosaur_400.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluIZMakXc_uOoYwPJA",
     "lego_400.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluBbbdxzOG5q4a98yA",
+    "lego_800.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluIb8oRozVWUMQCfmg?e=kjmdss",
+    "matthew_400.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluIaaqQ97nHIfBgZug",
+    "matthew_800.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluIca3iBNB8vroNRnQ",
     "antinous_400_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluB8NZz3kOP4at1QPQ",
-    "lego_400_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluB7Bf3qx5P3h5V9CQ"
+    "dinosaur_400_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluIfQQ_sA5irKyvdfQ",
+    "matthew_400_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluIgx8sD53tY-i629A",
+    "matthew_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluIep3ZQzMCB7Tdj1A",
+    "lego_400_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluB7Bf3qx5P3h5V9CQ",
+    "lego_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluIdfgHB-jiKIvRxZQ"
 }
 
 

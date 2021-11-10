@@ -136,3 +136,4 @@ config.json
 data/*.npz
 models
 *.mp4
+*.ps1
