@@ -43,6 +43,8 @@ def _parse_args():
                         help="Color space to use for training")
     parser.add_argument("--num-frames", type=int, default=200,
                         help="Number of frames in the training video orbit.")
+    parser.add_argument("--device", default="cuda",
+                        help="Pytorch compute device")
     return parser.parse_args()
 
 
@@ -80,7 +82,7 @@ def _main():
     model = ffn.Voxels(args.side, scale)
 
     raycaster = ffn.Raycaster(model)
-    raycaster.to("cuda")
+    raycaster.to(args.device)
 
     log = raycaster.fit(train_dataset, val_dataset, args.results_dir,
                         args.batch_size, args.learning_rate,

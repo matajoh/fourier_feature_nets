@@ -36,6 +36,8 @@ def _parse_args():
                         help="Alpha threshold below which pixels are omitted.")
     parser.add_argument("--batch_size", type=int, default=4096,
                         help="Batch size for rendering.")
+    parser.add_argument("--device", default="cuda",
+                        help="Pytorch compute device")
     return parser.parse_args()
 
 
@@ -62,11 +64,11 @@ def _main():
     bounds_transform = sp.Transforms.scale(2)
 
     model = ffn.load_model(args.model_path)
-    model = model.to("cuda")
+    model = model.to(args.device)
 
     if args.opacity_model:
         opacity_model = ffn.load_model(args.opacity_model)
-        opacity_model.to("cuda")
+        opacity_model.to(args.device)
     else:
         opacity_model = model
 
