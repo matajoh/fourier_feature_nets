@@ -1,0 +1,12 @@
+wheel
+scenepic
+numba
+numpy
+opencv-python
+torch
+matplotlib
+trimesh
+nbstripout
+requests
+progress
+jupyter
