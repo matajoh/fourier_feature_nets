@@ -54,6 +54,8 @@ def _parse_args():
                         help="Decay rate for the learning rate.")
     parser.add_argument("--decay-steps", type=int, default=2500,
                         help="Interval over which the rate should decay")
+    parser.add_argument("--device", default="cuda",
+                        help="Pytorch compute device")
     return parser.parse_args()
 
 
@@ -78,7 +80,7 @@ def _main():
         print("Dataset unavailable, exiting.")
         exit(1)
 
-    dataset = dataset.to("cuda")
+    dataset = dataset.to(args.device)
 
     if args.nerf_model == "mlp":
         model = ffn.MLP(2, 3, num_channels=args.num_channels)
@@ -123,7 +125,7 @@ def _main():
     else:
         writer = None
 
-    model = model.to("cuda")
+    model = model.to(args.device)
     optim = torch.optim.Adam(model.parameters(), args.learning_rate)
     for step in range(args.num_steps + 1):
         if step % args.report_interval == 0 or step == args.num_steps:

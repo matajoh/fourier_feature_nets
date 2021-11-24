@@ -92,8 +92,8 @@ def volume_raycasting(dataset: ffn.RayDataset, voxels: ffn.OcTree,
 
     camera_positions = np.concatenate([cam.position for cam in sampler.cameras])
     hero_cam = camera_positions[:, 2].argmax()
-    height, width = dataset.images.shape[1:3]
-    resolution = ffn.Resolution(width, height)
+    image_height, image_width = dataset.images.shape[1:3]
+    resolution = ffn.Resolution(image_width, image_height)
     resolution = resolution.scale_to_height(image_resolution)
 
     frustum_meshes = []
@@ -373,7 +373,9 @@ def volume_raycasting(dataset: ffn.RayDataset, voxels: ffn.OcTree,
     final_positions = starts + camera_depth * directions
     final_positions = final_positions.reshape(num_rays, 1, 3)
     model_start = num_final_frames - len(model_meshes)
+    bar = ffn.ETABar("Final", max=num_final_frames)
     for i in range(num_final_frames):
+        bar.next()
         frame = canvas.create_frame()
         frames.append(frame)
 
@@ -411,13 +413,16 @@ def volume_raycasting(dataset: ffn.RayDataset, voxels: ffn.OcTree,
                 for mesh in model_meshes[j]:
                     frame.add_mesh(mesh)
 
+    bar.finish()
     camera_pos = _interp(camera_pos)
     camera_fov = _interp(camera_fov)
     camera_lookat = _interp(camera_lookat)
     path_mesh = scene.create_mesh(layer_id="camera_path")
     last_pos = camera_pos[0]
     last_lookat = camera_lookat[0]
+    bar = ffn.ETABar("Camera Track")
     for frame, pos, fov, lookat in zip(frames, camera_pos, camera_fov, camera_lookat):
+        bar.next()
         camera = sp.Camera(pos, lookat, aspect_ratio=width/height,
                            fov_y_degrees=fov)
         frame.camera = camera
@@ -432,6 +437,8 @@ def volume_raycasting(dataset: ffn.RayDataset, voxels: ffn.OcTree,
         cam_mesh.add_camera_frustum(camera, sp.Colors.Red)
         frame.add_mesh(cam_mesh)
         frame.add_mesh(path_mesh)
+
+    bar.finish()
 
     for _ in range(num_rest_frames):
         frame = canvas.create_frame()
@@ -459,3 +466,11 @@ def volume_raycasting(dataset: ffn.RayDataset, voxels: ffn.OcTree,
     })
 
     return scene
+
+
+if __name__ == "__main__":
+    dataset = ffn.RayDataset.load("antinous_800.npz", "train", 64, True, False)
+    voxels = ffn.OcTree.load("antinous_octree_10.npz")
+    scene = volume_raycasting(dataset, voxels, width=1280, height=720)
+    print("Writing scenepic to file...")
+    scene.save_as_html("volume_raycasting.html", "Volume Raycasting")

@@ -58,6 +58,8 @@ def _parse_args():
                         help="Color space to use during training.")
     parser.add_argument("--num-frames", type=int, default=200,
                         help="Number of frames in the training video orbit.")
+    parser.add_argument("--device", default="cuda",
+                        help="Pytorch compute device")
     return parser.parse_args()
 
 
@@ -85,7 +87,7 @@ def _main():
         if opacity_model is None:
             return 1
 
-        opacity_model = opacity_model.to("cuda")
+        opacity_model = opacity_model.to(args.device)
     else:
         opacity_model = None
 
@@ -129,7 +131,7 @@ def _main():
         train_dataset.mode = ffn.RayDataset.Mode.Dilate
 
     raycaster = ffn.Raycaster(model)
-    raycaster.to("cuda")
+    raycaster.to(args.device)
 
     log = raycaster.fit(train_dataset, val_dataset, args.results_dir,
                         args.batch_size, args.learning_rate,

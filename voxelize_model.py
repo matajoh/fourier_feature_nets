@@ -27,6 +27,8 @@ def _parse_args():
                         help="Threshold to use when filtering samples")
     parser.add_argument("--opacity-model-path",
                         help="Path to an optional opacity model")
+    parser.add_argument("--device", default="cuda",
+                        help="Pytorch compute device")
     return parser.parse_args()
 
 
@@ -39,7 +41,7 @@ def _main():
 
     if args.opacity_model_path:
         opacity_model = ffn.load_model(args.opacity_model_path)
-        opacity_model = opacity_model.to("cuda")
+        opacity_model = opacity_model.to(args.device)
     else:
         opacity_model = None
 
@@ -54,9 +56,9 @@ def _main():
                                          False)
 
     sampler = dataset.sampler
-    model = model.to("cuda")
+    model = model.to(args.device)
     raycaster = ffn.Raycaster(model)
-    raycaster.to("cuda")
+    raycaster.to(args.device)
     num_rays = len(sampler)
     colors = []
     positions = []
@@ -66,7 +68,7 @@ def _main():
             end = min(start + args.batch_size, num_rays)
             index = list(range(start, end))
             rays = sampler[list(range(start, end))]
-            color, alpha, depth = raycaster.render(rays.to("cuda"), True)
+            color, alpha, depth = raycaster.render(rays.to(args.device), True)
             valid = (alpha > args.alpha_threshold).cpu()
             colors.append(color[valid].cpu().numpy())
             starts = sampler.starts[index]

@@ -27,6 +27,8 @@ def _parse_args():
                         help="Path to a model to use to predict opacity")
     parser.add_argument("--batch-size", type=int, default=4096,
                         help="Batch size to use when quering the opacity model")
+    parser.add_argument("--device", default="cuda",
+                        help="Pytorch compute device")
     return parser.parse_args()
 
 
@@ -38,7 +40,7 @@ def _main():
         if model is None:
             return 1
 
-        model = model.to("cuda")
+        model = model.to(args.device)
     else:
         model = None
 
