@@ -9,7 +9,7 @@ import numpy as np
 from progress.bar import ChargingBar
 import trimesh
 
-from .utils import download_asset, interpolate_bilinear
+from .utils import ETABar, download_asset, interpolate_bilinear
 
 
 Vector = NamedTuple("Vector", [("x", float), ("y", float), ("z", float)])
@@ -583,13 +583,17 @@ def _list_children(node: Node) -> List[Node]:
 def _leaf_nodes(scale: float, node_ids: Set[int], leaf_ids: Set[int]) -> List[Node]:
     queue = deque([Node(0, 0.0, 0.0, 0.0, scale, 0)])
     leaves = []
+    bar = ETABar("Building OcTree", max=len(node_ids) + len(leaf_ids))
     while queue:
         current = queue.popleft()
         if current.id in leaf_ids:
             leaves.append(current)
+            bar.next()
         elif current.id in node_ids:
             queue.extend(_list_children(current))
+            bar.next()
 
+    bar.finish()
     return leaves
 
 

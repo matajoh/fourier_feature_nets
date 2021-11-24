@@ -90,3 +90,9 @@ def voxels_animation(voxels: ffn.OcTree, min_depth=4, num_frames=300,
         frame.camera = camera
 
     return scene
+
+
+if __name__ == "__main__":
+    voxels = ffn.OcTree.load("antinous_octree_10.npz")
+    scene = voxels_animation(voxels, resolution=(800, 800))
+    scene.save_as_html("voxels_animation.html", "Voxels Animation")
