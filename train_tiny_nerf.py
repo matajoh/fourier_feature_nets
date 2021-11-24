@@ -51,6 +51,8 @@ def _parse_args():
                         help="Regularizer term for the weights.")
     parser.add_argument("--make-video", action="store_true",
                         help="Whether to render frames for a training video.")
+    parser.add_argument("--make-activations", action="store_true",
+                        help="Whether to render frames for an activations video.")
     parser.add_argument("--color-space", choices=["YCrCb", "RGB"],
                         default="RGB",
                         help="Color space to use during training.")
