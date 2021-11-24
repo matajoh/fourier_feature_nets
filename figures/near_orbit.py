@@ -1,3 +1,5 @@
+"""Produces images from a dataset near the orbit positions."""
+
 import argparse
 
 import cv2
@@ -36,7 +38,7 @@ def _main():
                                for extrinsics in train_extrinsics])
 
     orbit_cameras = ffn.orbit(up_dir, forward_dir,
-                               args.num_frames, 40, resolution, args.distance)
+                              args.num_frames, 40, resolution, args.distance)
 
     orbit_positions = np.stack([cam.position for cam in orbit_cameras])
 

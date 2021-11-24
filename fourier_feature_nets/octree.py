@@ -480,7 +480,7 @@ def _trace_ray_path(scale: float, node_index: np.ndarray,
                 t_stops[stop] = t
                 leaves[stop] = -1
 
-                # this is copypasta from the leaf code. Not ideal.
+                # TODO this is copypasta from the leaf code. Not ideal.
                 stack.pop()
                 stop += 1
                 if t >= tr.t_max or stop == max_length - 1:

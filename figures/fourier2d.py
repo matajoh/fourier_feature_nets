@@ -1,3 +1,5 @@
+"""2D Fourier plots/images."""
+
 import os
 
 import cv2

@@ -1,4 +1,4 @@
-"""Interprets a volumetric model function as voxels."""
+"""Convenience script for turning a mesh into an OcTree."""
 
 import argparse
 
@@ -26,7 +26,7 @@ def _main():
 
     print("Building the octree")
     voxels = ffn.OcTree.build_from_mesh(args.mesh_path, args.voxel_depth,
-                                         args.min_leaf_size, up_dir)
+                                        args.min_leaf_size, up_dir)
     voxels.save(args.output_path)
 
 
