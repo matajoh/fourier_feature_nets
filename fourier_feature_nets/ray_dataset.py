@@ -72,7 +72,8 @@ class RayDataset(Dataset):
                  cameras: List[CameraInfo], num_samples: int,
                  include_alpha=True, stratified=False,
                  opacity_model: nn.Module = None,
-                 batch_size=4096, color_space="RGB"):
+                 batch_size=4096, color_space="RGB",
+                 sparse_size=50):
         """Constructor.
 
         Args:
@@ -94,6 +95,8 @@ class RayDataset(Dataset):
                                         model. Defaults to 4096.
             color_space (str, optional): The color space to use. Defaults to
                                          "RGB".
+            sparse_size (int, optional): The vertical resolution of
+                                         the sparse sampling version.
         """
         assert len(images.shape) == 4
         assert len(images) == len(cameras)
@@ -124,7 +127,6 @@ class RayDataset(Dataset):
         crop_points = torch.from_numpy(crop_points)
         self.crop_rays_per_camera = len(crop_points)
 
-        sparse_size = 100
         sparse_points = torch.LongTensor(self._subsample_rays(sparse_size))
         sparse_height = sparse_size
         sparse_width = sparse_size * self.image_width // self.image_height
@@ -217,16 +219,10 @@ class RayDataset(Dataset):
         Returns:
             np.ndarray: A (H,W,3) uint8 RGB tensor
         """
-        if self.mode == RayDataset.Mode.Sparse:
-            # TODO pretty sure this doesn't work
-            pixels = colors.reshape(*self.sparse_resolution, 3)
-        else:
-            pixels = np.zeros((self.image_height*self.image_width, 3),
-                              np.float32)
-            index = self.index_for_camera(camera)
-            pixels[index] = colors
-            pixels = pixels.reshape(self.image_height, self.image_width, 3)
-
+        pixels = np.zeros((self.image_height*self.image_width, 3), np.float32)
+        index = self.index_for_camera(camera)
+        pixels[index] = colors
+        pixels = pixels.reshape(self.image_height, self.image_width, 3)
         pixels = (pixels * 255).astype(np.uint8)
         if self.color_space == "YCrCb":
             pixels = cv2.cvtColor(pixels, cv2.COLOR_YCrCB2RGB)
@@ -414,7 +410,8 @@ class RayDataset(Dataset):
     def load(path: str, split: str, num_samples: int,
              include_alpha: bool, stratified: bool,
              opacity_model: nn.Module = None,
-             batch_size=4096, color_space="RGB") -> "RayDataset":
+             batch_size=4096, color_space="RGB",
+             sparse_size=50) -> "RayDataset":
         """Loads a dataset from an NPZ file.
 
         Description:
@@ -440,6 +437,7 @@ class RayDataset(Dataset):
                                                  Defaults to None.
             batch_size (int, optional): Batch size to use when sampling the
                                         opacity model.
+            sparse_size (int, optional): Resolution for sparse sampling.
 
         Returns:
             RayDataset: A dataset made from the camera and image data
@@ -483,7 +481,7 @@ class RayDataset(Dataset):
                                                         extrinsics))]
         return RayDataset(split, images, bounds, cameras, num_samples,
                           include_alpha, stratified, opacity_model,
-                          batch_size, color_space)
+                          batch_size, color_space, sparse_size)
 
     def _subsample_rays(self, resolution: int) -> List[int]:
         num_x_samples = resolution * self.image_width // self.image_height
@@ -496,7 +494,7 @@ class RayDataset(Dataset):
         index = index.tolist()
         return index
 
-    def to_scenepic(self, resolution=50) -> sp.Scene:
+    def to_scenepic(self) -> sp.Scene:
         """Creates a ray sampling visualization ScenePic for the dataset."""
         scene = sp.Scene()
         frustums = scene.create_mesh("frustums", layer_id="frustums")
@@ -536,8 +534,6 @@ class RayDataset(Dataset):
 
             frustums.add_camera_frustum(camera, color, depth=0.5, thickness=0.01)
 
-        self.subsample_index = set(self._subsample_rays(resolution))
-
         bar.finish()
 
         bar = ETABar("Sampling Rays", max=self.num_cameras)
@@ -552,10 +548,19 @@ class RayDataset(Dataset):
         for mesh in image_meshes:
             frame.add_mesh(mesh)
 
-        for i in idx:
+        sampling_mode = self.mode
+        for cam in idx:
             bar.next()
-            camera = self.sampler.cameras[i]
-            entry = self.rays_for_camera(i)
+            camera = self.sampler.cameras[cam]
+
+            self.mode = RayDataset.Mode.Sparse
+            index = set(self.index_for_camera(cam))
+            self.mode = sampling_mode
+            index.intersection_update(self.index_for_camera(cam))
+            self.mode = RayDataset.Mode.Full
+            cam_start = cam * self.sampler.rays_per_camera
+            index = [cam_start + i for i in index]
+            entry = self[index]
 
             colors = entry.colors.unsqueeze(1)
             colors = colors.expand(-1, self.num_samples, -1)
@@ -594,8 +599,7 @@ class RayDataset(Dataset):
             for mesh in image_meshes:
                 frame.add_mesh(mesh)
 
-        # TODO this needs a better mechanism
-        self.subsample_index = None
+        self.mode = sampling_mode
 
         canvas.set_layer_settings({
             "bounds": {"opacity": 0.25},

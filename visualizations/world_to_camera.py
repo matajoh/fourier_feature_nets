@@ -108,7 +108,7 @@ def world_to_camera(scene: sp.Scene, voxels: ffn.OcTree,
         _add_meshes(frame, transform, frame.camera)
 
     print("Intersecting rays")
-    vals = np.linspace(0, 800, 20, endpoint=False).astype(np.int32)
+    vals = np.linspace(0, resolution, 20, endpoint=False).astype(np.int32)
     points = np.stack(np.meshgrid(vals, vals), -1).reshape(-1, 2)
     rays = camera.raycast(points)
     paths = voxels.intersect(rays.origin, rays.direction, 64)

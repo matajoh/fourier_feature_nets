@@ -431,12 +431,29 @@ def _trace_ray_path(scale: float, node_index: np.ndarray,
     while stack:
         current = stack[-1]
 
-        index = np.searchsorted(leaf_index, current.id)
-        if leaf_index[index] == current.id:
-            # found a leaf to intersect. Add to path.
+        # need to keep searching down the tree
+        index = np.searchsorted(node_index, current.id)
+        if index < len(node_index) and node_index[index] == current.id:
+            # we're in a valid node. Is the leaf somewhere in here?
+            if _node_contains(current, point):
+                # Yes. Push.
+                child = _find_child_of_node(current, point)
+                stack.append(child)
+            else:
+                # Nope. Pop.
+                stack.pop()
+        else:
+            # Advance.
             tc = _intersect_node_with_ray(current, ray)
             t_stops[stop] = t
-            leaves[stop] = index
+
+            index = np.searchsorted(leaf_index, current.id)
+            if leaf_index[index] == current.id:
+                # we're in a leaf.
+                leaves[stop] = index
+            else:
+                # We're in empty space.
+                leaves[stop] = -1
 
             stack.pop()
             stop += 1
@@ -451,50 +468,16 @@ def _trace_ray_path(scale: float, node_index: np.ndarray,
             while _node_contains(current, point):
                 # ...very paranoid about this failure case.
                 # we NEED to leave the current leaf or the algorithm
-                # will never return. This would be safer/better with
-                # integers.
+                # will never return. 
+                # TOD This would be safer/better/faster with integers.
                 t += 1e-5
                 point = _cast_ray(ray, t)
 
-            # are we in a sibling?
+            # did we stumble into a sibling?
             sibling = _find_sibling_of_node(current, point, tc.a_max)
             if sibling != current:
                 # nice, no need to pop back to the parent.
                 stack.append(sibling)
-        else:
-            # need to keep searching down the tree
-            index = np.searchsorted(node_index, current.id)
-            if index < len(node_index) and node_index[index] == current.id:
-                # we're in a valid node. Is the leaf somewhere in here?
-                if _node_contains(current, point):
-                    # Yes. Push.
-                    child = _find_child_of_node(current, point)
-                    stack.append(child)
-                else:
-                    # Nope. Pop.
-                    stack.pop()
-            else:
-                # We're in empty space. We need to skip through
-                # as quickly as possible.
-                tc = _intersect_node_with_ray(current, ray)
-                t_stops[stop] = t
-                leaves[stop] = -1
-
-                # TODO this is copypasta from the leaf code. Not ideal.
-                stack.pop()
-                stop += 1
-                if t >= tr.t_max or stop == max_length - 1:
-                    break
-
-                t = tc.t_max + 1e-5
-                point = _cast_ray(ray, t)
-                while _node_contains(current, point):
-                    t += 1e-5
-                    point = _cast_ray(ray, t)
-
-                sibling = _find_sibling_of_node(current, point, tc.a_max)
-                if sibling != current:
-                    stack.append(sibling)
 
     return Path(t_stops, leaves)
 
@@ -583,15 +566,16 @@ def _list_children(node: Node) -> List[Node]:
 def _leaf_nodes(scale: float, node_ids: Set[int], leaf_ids: Set[int]) -> List[Node]:
     queue = deque([Node(0, 0.0, 0.0, 0.0, scale, 0)])
     leaves = []
-    bar = ETABar("Building OcTree", max=len(node_ids) + len(leaf_ids))
+    report_interval = len(leaf_ids) // 100
+    bar = ETABar("Building OcTree", max=len(leaf_ids))
     while queue:
         current = queue.popleft()
         if current.id in leaf_ids:
             leaves.append(current)
-            bar.next()
+            if len(leaves) % report_interval == 0:
+                bar.next(report_interval)
         elif current.id in node_ids:
             queue.extend(_list_children(current))
-            bar.next()
 
     bar.finish()
     return leaves
