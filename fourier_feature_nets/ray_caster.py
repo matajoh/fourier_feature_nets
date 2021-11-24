@@ -466,9 +466,10 @@ class Raycaster(nn.Module):
                     if video_sampler or act_sampler:
                         if video_sampler:
                             self._render_video(video_sampler,
+                                               render_index,
                                                train_dataset.color_space,
                                                batch_size,
-                                               results_dir, render_index)
+                                               results_dir)
 
                         if act_sampler:
                             self._render_act(act_sampler,

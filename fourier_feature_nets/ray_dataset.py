@@ -142,7 +142,9 @@ class RayDataset(Dataset):
         crop_index = []
         sparse_index = []
         dilate_index = []
+        bar = ETABar("Indexing", max=len(images))
         for image in images:
+            bar.next()
             color = image[..., :3]
             if color_space == "YCrCb":
                 color = cv2.cvtColor(color, cv2.COLOR_RGB2YCrCb)
@@ -174,6 +176,7 @@ class RayDataset(Dataset):
             crop_index.append(crop_points + offset)
             sparse_index.append(sparse_points + offset)
 
+        bar.finish()
         self.crop_index = torch.cat(crop_index)
         self.sparse_index = torch.cat(sparse_index)
         self.dilate_index = torch.cat(dilate_index)
