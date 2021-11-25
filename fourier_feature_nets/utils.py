@@ -28,6 +28,8 @@ def _in_ipynb():
             return False  # Other type (?)
     except NameError:
         return False      # Probably standard Python interpreter
+    except ModuleNotFoundError:
+        return False
 
 
 class ETABar(Bar):
@@ -104,6 +106,8 @@ ASSETS = {
     "matthew_800.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluI0rBTyq9jSnd4IjA",
     "rubik_400.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluI60mrfqAcxYIsdLg",
     "rubik_800.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluI7DdBRXbBngRMEew",
+    "trex_400.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluM59kAfIq0H1AVdQA",
+    "trex_800.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluM63nCZzfryxRR7ow",
     "antinous_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJLoo7yjPYQz8W5dg",
     "antinous_800_nerf.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJclttRvj65vHpUiA",
     "benin_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJNUlKmPZJiZ3HUlg",
@@ -112,6 +116,7 @@ ASSETS = {
     "lego_800_nerf.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJeY79jz1o51K4CIg",
     "matthew_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJOcOc6Ce3ZUcQl3g",
     "matthew_800_nerf.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJf0KKODbTR291vwQ",
+    "trex_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluM74RKvya3PjvzqTw",
     "antinous_400_mlp.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJqpdzBhx9QAtbJ-g",
     "antinous_400_pos.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJokd4Fl4UGLI_bNw",
     "benin_400_mlp.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJlhzc0JjMUus5HsA",
