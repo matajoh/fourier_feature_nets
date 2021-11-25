@@ -1,7 +1,7 @@
 wheel
 scenepic
 numba
-numpy
+numpy==1.20
 opencv-python
 torch
 matplotlib
