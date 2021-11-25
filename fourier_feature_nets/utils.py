@@ -117,6 +117,7 @@ ASSETS = {
     "matthew_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJOcOc6Ce3ZUcQl3g",
     "matthew_800_nerf.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJf0KKODbTR291vwQ",
     "trex_800_vox128.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluM74RKvya3PjvzqTw",
+    "trex_800_nerf.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluNNxRr0lxo_U8-Kmg",
     "antinous_400_mlp.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJqpdzBhx9QAtbJ-g",
     "antinous_400_pos.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJokd4Fl4UGLI_bNw",
     "benin_400_mlp.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJlhzc0JjMUus5HsA",
@@ -125,6 +126,8 @@ ASSETS = {
     "lego_400_pos.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJrPmpRYZlP0fP5Eg",
     "matthew_400_mlp.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJmKYDqQpitLHVIHg",
     "matthew_400_pos.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluJpn1o7zC8uhdSDXA",
+    "trex_400_mlp.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluNLAlM2t9uTqFO5DA",
+    "trex_400_pos.pt": "https://1drv.ms/u/s!AnWvK2b51nGqluNMcZoNeFnSwCnSNw",
     "antinous_octree_8.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluJt3FR8NAJW84HT2A",
     "antinous_octree_10.npz": "https://1drv.ms/u/s!AnWvK2b51nGqluJupuBKuwq0hYk-Tw"
 }
