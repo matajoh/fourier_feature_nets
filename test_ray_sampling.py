@@ -47,7 +47,7 @@ def _main():
     dataset = RayDataset.load(args.data_path, args.split,
                               args.num_samples, True,
                               args.stratified, model,
-                              args.batch_size)
+                              args.batch_size, sparse_size=args.resolution)
     if dataset is None:
         return 1
 
@@ -63,7 +63,7 @@ def _main():
     elif args.mode == "dilate":
         dataset.mode = RayDataset.Mode.Dilate
 
-    scene = dataset.to_scenepic(args.resolution)
+    scene = dataset.to_scenepic()
     scene.save_as_html(args.output_path, "Ray Sampling")
 
 

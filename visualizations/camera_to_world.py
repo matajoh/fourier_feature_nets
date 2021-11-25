@@ -53,8 +53,9 @@ def camera_to_world(scene: sp.Scene, voxels: ffn.OcTree,
         mesh.enable_instancing(depth_centers, colors=depth_colors)
         model.append(mesh)
 
+    image_height, image_width = image.shape[:2]
     origin_camera = ffn.CameraInfo("origin",
-                                   ffn.Resolution(resolution, resolution),
+                                   ffn.Resolution(image_width, image_height),
                                    camera.intrinsics,
                                    np.eye(4, dtype=np.float32))
 
@@ -183,3 +184,12 @@ def camera_to_world(scene: sp.Scene, voxels: ffn.OcTree,
         _add_meshes(frame, camera_to_world, frame.camera)
 
     return canvas
+
+
+if __name__ == "__main__":
+    dataset = ffn.RayDataset.load("antinous_400.npz", "train", 64, True, False)
+    voxels = ffn.OcTree.load("antinous_octree_10.npz")
+    scene = sp.Scene()
+    camera_to_world(scene, voxels, dataset.cameras[6], dataset.images[6], 800)
+    print("Writing scenepic to file...")
+    scene.save_as_html("camera_to_world.html", "Camera to World")

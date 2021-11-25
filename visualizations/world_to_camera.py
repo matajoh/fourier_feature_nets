@@ -108,7 +108,7 @@ def world_to_camera(scene: sp.Scene, voxels: ffn.OcTree,
         _add_meshes(frame, transform, frame.camera)
 
     print("Intersecting rays")
-    vals = np.linspace(0, 800, 20, endpoint=False).astype(np.int32)
+    vals = np.linspace(0, resolution, 20, endpoint=False).astype(np.int32)
     points = np.stack(np.meshgrid(vals, vals), -1).reshape(-1, 2)
     rays = camera.raycast(points)
     paths = voxels.intersect(rays.origin, rays.direction, 64)
@@ -167,3 +167,12 @@ def world_to_camera(scene: sp.Scene, voxels: ffn.OcTree,
         position = rotation @ position
         frame.camera = sp.Camera(position[:3], lookat, fov_y_degrees=camera_fov[i])
         _add_meshes(frame, world_to_camera, frame.camera)
+
+
+if __name__ == "__main__":
+    dataset = ffn.RayDataset.load("antinous_400.npz", "train", 64, True, False)
+    voxels = ffn.OcTree.load("antinous_octree_8.npz")
+    scene = sp.Scene()
+    world_to_camera(scene, voxels, dataset.cameras[6], dataset.images[6], 800)
+    print("Writing scenepic to file...")
+    scene.save_as_html("world_to_camera.html", "World to Camera")
