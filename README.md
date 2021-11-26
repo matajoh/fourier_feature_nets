@@ -123,8 +123,9 @@ We recommend you use one of the following (all datasets are provided in 400 and 
 |--------------|-------------|---------|-------|--------|-------------|--------------|
 | `antinous_(size)` | (size)x(size) | 100 | 7 | 13 | Renders of a [sculpture](https://sketchfab.com/3d-models/antinous-12aad55d55e1480da4811c3a4aa42f5f) kindly provided by the Fitzwilliam Museum. Does not include view-dependent effects.| ![Antinous](docs/antinous.jpg)|
 | `rubik_(size)` | (size)x(size) | 100 | 7 | 13 | This work is based on "Rubik's Cube" (https://sketchfab.com/3d-models/rubiks-cube-d7d8aa83720246c782bca30dbadebb98) by BeyondDigital (https://sketchfab.com/BeyondDigital) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/). Does not include view-dependent effects. | ![Rubik](docs/rubik.jpg) |
-| `lego_(size)` | (size)x(1.5 * size) | 100 | 7 | 13 | Physically based renders of a lego build, provided by the NeRF authors. | ![Lego](docs/lego.jpg) |
-| `benin_(size)` | (size)x(size) | 74 | 10 | 0 | Free moving, hand-held photographs of a bronze statue of a rooster from Benin, kindly provided by Jesus College, Cambridge. | ![Benin](docs/benin.jpg) |
+| `lego_(size)` | (size)x(size) | 100 | 7 | 13 | Physically based renders of a lego build, provided by the NeRF authors. | ![Lego](docs/lego.jpg) |
+| `trex_(size)` | (size)x(size) | 100 | 7 | 13 | This work is based on "The revenge of the traditional toys" (https://sketchfab.com/3d-models/the-revenge-of-the-traditional-toys-d2dd1ee7948343308cd732c665ef1337) by Bastien Genbrugge (https://sketchfab.com/bastienBGR) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/). Rendered with PBR and thus includes multiple view-dependent effects. | ![T-Rex](docs/trex.jpg) |
+| `benin_(size)` | (size)x(1.5 *size) | 74 | 10 | 0 | Free moving, hand-held photographs of a bronze statue of a rooster from Benin, kindly provided by Jesus College, Cambridge. | ![Benin](docs/benin.jpg) |
 | `matthew_(size)` | (size)x(size) | 26 | 5 | 0 | Photographs of me, taken by a 31 camera fixed rig. | ![Matthew](docs/matthew.jpg)
 
 If you want to bring your own data, the format we support is an NPZ with the

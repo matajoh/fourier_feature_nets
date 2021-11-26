@@ -57,7 +57,12 @@ def _main():
             else:
                 image = images[i]
 
-            writer.frame[:] = cv2.resize(image, resolution)[..., :3]
+            if image.shape[-1] == 4:
+                image = (image / 255)
+                image = image[..., :3] * image[..., 3:]
+                image = (image * 255).astype(np.uint8)
+
+            writer.frame[:] = cv2.resize(image, resolution)
             writer.write_frame()
 
 

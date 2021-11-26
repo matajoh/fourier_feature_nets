@@ -54,6 +54,7 @@ class ETABar(Bar):
         if _in_ipynb():
             from IPython.display import clear_output
             clear_output(wait=True)
+            self.fill = "#"
             print(line)
         else:
             Bar.writeln(self, line)
