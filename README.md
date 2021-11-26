@@ -257,7 +257,7 @@ is a side-by-side comparison of `mlp` and `positional` training for our
 datasets (top row is nearest training image to the orbit camera).
 Your results should be similar.
 
-https://user-images.githubusercontent.com/6894931/142744695-5a01bec4-3de5-4907-b3d5-8ef73e723243.mp4
+https://user-images.githubusercontent.com/6894931/143578326-e786db33-f7e8-4ced-9a21-f9be80611088.mp4
 
 # NeRF
 
