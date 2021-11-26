@@ -119,7 +119,7 @@ dataset = ffn.RayDataset.load("antinous_400.npz", split="train", num_samples=64)
 
 We recommend you use one of the following (all datasets are provided in 400 and 800 versions):
 
-| Name         |  image size | # train | # val | # test | Description | Sample image |
+| Name         |  Image Size | # Train | # Val | # Test | Description | Sample image |
 |--------------|-------------|---------|-------|--------|-------------|--------------|
 | `antinous_(size)` | (size)x(size) | 100 | 7 | 13 | Renders of a [sculpture](https://sketchfab.com/3d-models/antinous-12aad55d55e1480da4811c3a4aa42f5f) kindly provided by the Fitzwilliam Museum. Does not include view-dependent effects.| ![Antinous](docs/antinous.jpg)|
 | `rubik_(size)` | (size)x(size) | 100 | 7 | 13 | This work is based on "Rubik's Cube" (https://sketchfab.com/3d-models/rubiks-cube-d7d8aa83720246c782bca30dbadebb98) by BeyondDigital (https://sketchfab.com/BeyondDigital) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/). Does not include view-dependent effects. | ![Rubik](docs/rubik.jpg) |
@@ -215,7 +215,7 @@ If you look in the `train` and `val` folders in the output
 directory you can see images produced during training showing how
 the model improves over time. There is also a visualization of the
 model provided in the `voxels.html` scenepic. Here is an example
-of an image produced by the [Ray Caster](nerf/ray_caster.py)]:
+of an image produced by the [Ray Caster](nerf/ray_caster.py):
 
 ![Raycaster Training Image](docs/raycaster_training.png)
 
@@ -311,6 +311,8 @@ from the NeRF model:
 https://user-images.githubusercontent.com/6894931/142744753-cd155af5-f247-4854-b19b-32471eee80a8.mp4
 
 https://user-images.githubusercontent.com/6894931/142744750-638ceed9-5158-49b3-be9f-3e301730407d.mp4
+
+https://user-images.githubusercontent.com/6894931/143578140-65860c14-1b5d-458b-b2bb-7d814a3ef1e2.mp4
 
 You can produce these orbit videos yourself by calling, for example:
 
