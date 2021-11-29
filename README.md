@@ -2,7 +2,7 @@
 
 This repository is a companion to a lecture given at the University of
 Cambridge Engineering Department, which is available for
-viewing [here](https://1drv.ms/v/s!AnWvK2b51nGqluM0vjp_CImB0OKIwQ?e=xRDKTU).
+viewing [here](https://youtu.be/cXoaCw796Do).
 In it you will find the code to reproduce all
 of the visualizations and experiments shared in the lecture, as well as a
 [Jupyter Notebook](lecture_notes.ipynb) providing interactive lecture notes
