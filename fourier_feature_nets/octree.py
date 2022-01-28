@@ -566,7 +566,7 @@ def _list_children(node: Node) -> List[Node]:
 def _leaf_nodes(scale: float, node_ids: Set[int], leaf_ids: Set[int]) -> List[Node]:
     queue = deque([Node(0, 0.0, 0.0, 0.0, scale, 0)])
     leaves = []
-    report_interval = len(leaf_ids) // 100
+    report_interval = max(len(leaf_ids) // 100, 1)
     bar = ETABar("Building OcTree", max=len(leaf_ids))
     while queue:
         current = queue.popleft()
