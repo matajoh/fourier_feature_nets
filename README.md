@@ -206,7 +206,8 @@ the following command:
 
 You should be able to train a voxel representation of a radiance field.
 
-> Note: You may have trouble running this script (and the ones that follow) if
+> **Note**
+> You may have trouble running this script (and the ones that follow) if
 > your computer does not have a GPU with enough memory. See
 > [Running on Azure ML](#running-on-azure-ml) for information on how to run
 > these experiments in the cloud.
@@ -296,7 +297,8 @@ explore it for yourself as well:
 
 https://user-images.githubusercontent.com/6894931/142744739-94e2fd8e-aff9-473c-aa63-5533ef9b0f92.mp4
 
-> NOTE: the Tiny NeRF model can also take advantage of fine sampling using an
+> **Note**
+> The Tiny NeRF model can also take advantage of fine sampling using an
 > opacity model. Try it out!
 
 You can train the NeRF model with the following command:
