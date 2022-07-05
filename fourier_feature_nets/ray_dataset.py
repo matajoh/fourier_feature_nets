@@ -372,8 +372,9 @@ class RayDataset(Dataset):
 
         return self.subset(list(samples), num_samples, stratified)
 
-    def __getitem__(self,
-                    idx: Union[List[int], torch.Tensor]) -> RayData:
+    def get_rays(self,
+                 idx: Union[List[int], torch.Tensor],
+                 step: int) -> RayData:
         """Returns samples from the selected rays."""
         if torch.is_tensor(idx):
             idx = idx.tolist()
@@ -393,7 +394,7 @@ class RayDataset(Dataset):
                    if i % self.sampler.rays_per_camera in self.subsample_index]
 
         idx = self.sampler.to_valid(idx)
-        samples = self.sampler[idx]
+        samples = self.sampler.sample(idx, step)
         colors = self.colors[idx]
         if self.alphas is None or self.mode == RayDataset.Mode.Dilate:
             alphas = None

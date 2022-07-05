@@ -71,7 +71,7 @@ class RaySampler:
     def __init__(self, bounds: np.ndarray,
                  cameras: List[CameraInfo], num_samples: int,
                  stratified=False, opacity_model: nn.Module = None,
-                 batch_size=4096):
+                 batch_size=4096, anneal_start=0.5, num_annealing_steps=0):
         """Constructor.
 
         Args:
@@ -88,6 +88,12 @@ class RaySampler:
                                                  to None.
             batch_size (int, optional): Batch size to use with the opacity
                                         model. Defaults to 4096.
+            anneal_start (float, optiona): Starting value for the sample space
+                                           annealing. Defaults to 0.5.
+            num_annealing_steps (int, optional): Steps over which to anneal
+                                                 sampling to the full range of
+                                                 volume intersection. Defaults
+                                                 to 0.
         """
         self.bounds = bounds
         bounds_min = bounds @ np.array([-0.5, -0.5, -0.5, 1], np.float32)
@@ -99,13 +105,17 @@ class RaySampler:
         self.num_rays = len(cameras) * self.rays_per_camera
         self.num_cameras = len(cameras)
         self.num_samples = num_samples
+        self.anneal_start = anneal_start
+        self.num_annealing_steps = num_annealing_steps
         print({
             "width": self.image_width,
             "height": self.image_height,
             "rays_per_camera": self.rays_per_camera,
             "num_cameras": self.num_cameras,
             "num_rays": self.num_rays,
-            "num_samples": self.num_samples
+            "num_samples": self.num_samples,
+            "anneal_start": self.anneal_start,
+            "num_annealing_steps": self.num_annealing_steps
         })
         self.cameras = cameras
         self.stratified = stratified
@@ -344,7 +354,8 @@ class RaySampler:
 
         return samples
 
-    def __getitem__(self, idx: Union[List[int], torch.Tensor]) -> RaySamples:
+    def sample(self, idx: Union[List[int], torch.Tensor],
+               step: int) -> RaySamples:
         """Returns the requested sampled rays."""
         num_rays = len(idx)
 
@@ -357,6 +368,13 @@ class RaySampler:
             num_samples = self.num_samples
 
         near, far = self.near_far[:, idx]
+        if step < self.num_annealing_steps:
+            progress = step / self.num_annealing_steps
+            anneal = min(max(progress, self.anneal_start), 1)
+            midpoint = (near + far) * 0.5
+            near = midpoint + (near - midpoint) * anneal
+            far = midpoint + (far - midpoint) * anneal
+
         t_values = linspace(near, far, num_samples)
         if self.stratified:
             scale = (far - near) / num_samples

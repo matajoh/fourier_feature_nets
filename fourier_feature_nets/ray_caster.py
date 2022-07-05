@@ -308,7 +308,8 @@ class Raycaster(nn.Module):
 
     def _validate(self,
                   dataset: RayDataset,
-                  batch_size: int) -> torch.Tensor:
+                  batch_size: int,
+                  step: int) -> torch.Tensor:
         loss = []
         num_rays = len(dataset)
         num_validate_rays = min(num_rays, 1024*100)
@@ -326,7 +327,7 @@ class Raycaster(nn.Module):
                     break
 
                 batch = val_index[start:start + batch_size]
-                batch_rays = dataset[batch]
+                batch_rays = dataset.get_rays(batch, step)
                 loss.append(self._loss(batch_rays).item())
 
         self.model.train()
@@ -416,7 +417,7 @@ class Raycaster(nn.Module):
                                      decay_rate, decay_steps)
                 end = min(start + batch_size, num_rays)
                 batch = index[start:end].tolist()
-                batch_rays = train_dataset[batch]
+                batch_rays = train_dataset.get_rays(batch, step)
                 optim.zero_grad()
                 loss = self._loss(batch_rays)
                 loss.backward()
@@ -424,8 +425,9 @@ class Raycaster(nn.Module):
 
                 if step < 10 or step % report_interval == 0:
                     epoch += 1
-                    train_psnr = self._validate(trainval_dataset, batch_size)
-                    val_psnr = self._validate(val_dataset, batch_size)
+                    train_psnr = self._validate(trainval_dataset, batch_size,
+                                                step)
+                    val_psnr = self._validate(val_dataset, batch_size, step)
                     current_lr = optim.param_groups[0]["lr"]
                     current_time = time.time()
                     if step >= report_interval:
