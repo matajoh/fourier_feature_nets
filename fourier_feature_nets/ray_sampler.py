@@ -71,7 +71,7 @@ class RaySampler:
     def __init__(self, bounds: np.ndarray,
                  cameras: List[CameraInfo], num_samples: int,
                  stratified=False, opacity_model: nn.Module = None,
-                 batch_size=4096, anneal_start=0.5, num_annealing_steps=0):
+                 batch_size=4096, anneal_start=0.5, num_anneal_steps=0):
         """Constructor.
 
         Args:
@@ -90,10 +90,10 @@ class RaySampler:
                                         model. Defaults to 4096.
             anneal_start (float, optiona): Starting value for the sample space
                                            annealing. Defaults to 0.5.
-            num_annealing_steps (int, optional): Steps over which to anneal
-                                                 sampling to the full range of
-                                                 volume intersection. Defaults
-                                                 to 0.
+            num_anneal_steps (int, optional): Steps over which to anneal
+                                              sampling to the full range of
+                                              volume intersection. Defaults
+                                              to 0.
         """
         self.bounds = bounds
         bounds_min = bounds @ np.array([-0.5, -0.5, -0.5, 1], np.float32)
@@ -106,7 +106,7 @@ class RaySampler:
         self.num_cameras = len(cameras)
         self.num_samples = num_samples
         self.anneal_start = anneal_start
-        self.num_annealing_steps = num_annealing_steps
+        self.num_anneal_steps = num_anneal_steps
         print({
             "width": self.image_width,
             "height": self.image_height,
@@ -115,7 +115,7 @@ class RaySampler:
             "num_rays": self.num_rays,
             "num_samples": self.num_samples,
             "anneal_start": self.anneal_start,
-            "num_annealing_steps": self.num_annealing_steps
+            "num_anneal_steps": self.num_anneal_steps
         })
         self.cameras = cameras
         self.stratified = stratified
@@ -275,7 +275,7 @@ class RaySampler:
 
     def rays_for_camera(self, camera: int) -> RaySamples:
         """Returns the rays for the specified camera."""
-        return self[self._valid_for_camera(camera)]
+        return self.sample(self._valid_for_camera(camera), None)
 
     def to_valid(self, idx: List[int]) -> List[int]:
         """Filters the list of ray indices to include only valid rays.
@@ -368,8 +368,8 @@ class RaySampler:
             num_samples = self.num_samples
 
         near, far = self.near_far[:, idx]
-        if step < self.num_annealing_steps:
-            progress = step / self.num_annealing_steps
+        if step is not None and step < self.num_anneal_steps:
+            progress = step / self.num_anneal_steps
             anneal = min(max(progress, self.anneal_start), 1)
             midpoint = (near + far) * 0.5
             near = midpoint + (near - midpoint) * anneal

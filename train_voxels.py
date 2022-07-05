@@ -45,6 +45,12 @@ def _parse_args():
                         help="Number of frames in the training video orbit.")
     parser.add_argument("--device", default="cuda",
                         help="Pytorch compute device")
+    parser.add_argument("--anneal-start", type=float, default=0.2,
+                        help="Starting value for the sample space annealing.")
+    parser.add_argument("--num-anneal-steps", type=int, default=0,
+                        help=("Steps over which to anneal sampling to the full"
+                              "range of volume intersection."))
+
     return parser.parse_args()
 
 
@@ -56,7 +62,9 @@ def _main():
     include_alpha = args.mode == "rgba"
     train_dataset = ffn.RayDataset.load(args.data_path, "train",
                                         args.num_samples, include_alpha,
-                                        True, color_space=args.color_space)
+                                        True, color_space=args.color_space,
+                                        anneal_start=args.anneal_start,
+                                        num_anneal_steps=args.num_anneal_steps)
     val_dataset = ffn.RayDataset.load(args.data_path, "val",
                                       args.num_samples, include_alpha,
                                       False, color_space=args.color_space)
