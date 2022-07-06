@@ -19,7 +19,7 @@ except ImportError:
     Run = None
     print("Unable to import AzureML, running as local experiment")
 
-from .ray_dataset import RayData, RayDataset
+from .ray_dataset import RayDataset
 from .ray_sampler import RaySampler, RaySamples
 from .utils import (
     calculate_blend_weights,
@@ -92,11 +92,11 @@ class Raycaster(nn.Module):
 
         return RenderResult(output_color, output_alpha, output_depth)
 
-    def _loss(self, dataset: RayDataset, rays: RayData) -> torch.Tensor:
+    def _loss(self, dataset: RayDataset, rays: RaySamples) -> torch.Tensor:
         device = next(self.model.parameters()).device
         rays = rays.to(device)
 
-        render = self.render(rays.samples, True)
+        render = self.render(rays, True)
         return dataset.loss(rays, render)
 
     def render_image(self, sampler: RaySampler,
@@ -230,7 +230,7 @@ class Raycaster(nn.Module):
         with torch.no_grad():
             device = next(self.model.parameters()).device
             image_rays = dataset.rays_for_camera(camera)
-            num_rays = len(image_rays.samples.positions)
+            num_rays = len(image_rays.positions)
             predicted = []
             actual = []
             depth = []
@@ -241,13 +241,14 @@ class Raycaster(nn.Module):
                 idx = list(range(start, end))
                 batch_rays = image_rays.subset(idx)
                 batch_rays = batch_rays.to(device)
-                pred = self.render(batch_rays.samples, True)
+                pred = self.render(batch_rays, True)
+                act = dataset.render(batch_rays)
                 pred_colors = pred.color.cpu().numpy()
-                act_colors = batch_rays.colors.cpu().numpy()
+                act_colors = act.color.cpu().numpy()
                 pred_error = np.square(act_colors - pred_colors).sum(-1) / 3
-                if batch_rays.alphas is not None:
+                if act.alpha is not None:
                     pred_alphas = pred.alpha.cpu().numpy()
-                    act_alphas = batch_rays.alphas.cpu().numpy()
+                    act_alphas = act.alpha.cpu().numpy()
                     pred_error = 3 * pred_error
                     pred_error += np.square(act_alphas - pred_alphas)
                     pred_error /= 4
@@ -261,7 +262,7 @@ class Raycaster(nn.Module):
 
         cam_index = dataset.index_for_camera(camera)
 
-        width, height = dataset.image_width, dataset.image_height
+        width, height = dataset.cameras[camera].resolution
         predicted = np.concatenate(predicted)
         predicted_image = dataset.to_image(camera, np.clip(predicted, 0, 1))
 
@@ -308,7 +309,7 @@ class Raycaster(nn.Module):
         if num_validate_rays < num_rays:
             val_index = np.linspace(0, num_rays, num_validate_rays, endpoint=False)
             val_index = val_index.astype(np.int32)
-            val_index = dataset.sampler.to_valid(val_index.tolist())
+            val_index = dataset.to_valid(val_index.tolist())
         else:
             val_index = np.arange(num_rays)
 
@@ -320,7 +321,7 @@ class Raycaster(nn.Module):
 
                 batch = val_index[start:start + batch_size]
                 batch_rays = dataset.get_rays(batch, step)
-                loss.append(self._loss(batch_rays).item())
+                loss.append(self._loss(dataset, batch_rays).item())
 
         self.model.train()
         loss = np.mean(loss)
@@ -411,7 +412,7 @@ class Raycaster(nn.Module):
                 batch = index[start:end].tolist()
                 batch_rays = train_dataset.get_rays(batch, step)
                 optim.zero_grad()
-                loss = self._loss(batch_rays)
+                loss = self._loss(train_dataset, batch_rays)
                 loss.backward()
                 optim.step()
 
@@ -509,9 +510,9 @@ class Raycaster(nn.Module):
 
         scene = sp.Scene()
         frustums = scene.create_mesh("frustums", layer_id="frustums")
-        height = 800
-        width = dataset.image_width * height / dataset.image_height
-        canvas = scene.create_canvas_3d(width=width, height=height)
+        canvas_res = dataset.cameras[0].resolution.scale_to_height(800)
+        canvas = scene.create_canvas_3d(width=canvas_res.width,
+                                        height=canvas_res.height)
         canvas.shading = sp.Shading(sp.Colors.Gray)
 
         cmap = get_cmap("jet")
@@ -535,21 +536,20 @@ class Raycaster(nn.Module):
 
         bar.finish()
 
-        num_x_samples = resolution * dataset.image_width // dataset.image_height
-        num_y_samples = resolution
-        x_vals = np.linspace(0, dataset.image_width - 1, num_x_samples) + 0.5
-        y_vals = np.linspace(0, dataset.image_height - 1, num_y_samples) + 0.5
+        image_res = dataset.cameras[0].resolution
+        sample_res = image_res.scale_to_height(resolution)
+        x_vals = np.linspace(0, image_res.width - 1, sample_res.width) + 0.5
+        y_vals = np.linspace(0, image_res.height - 1, sample_res.height) + 0.5
         x_vals, y_vals = np.meshgrid(x_vals.astype(np.int32),
                                      y_vals.astype(np.int32))
-        index = y_vals.reshape(-1) * dataset.image_width + x_vals.reshape(-1)
+        index = y_vals.reshape(-1) * image_res.width + x_vals.reshape(-1)
         dataset.subsample_index = set(index.tolist())
 
         bar = ETABar("Sampling rays", max=dataset.num_cameras)
         device = next(self.model.parameters()).device
         for i, camera in enumerate(dataset.cameras):
             bar.next()
-            entry = dataset.rays_for_camera(i)
-            ray_samples = entry.samples
+            ray_samples = dataset.rays_for_camera(i)
             ray_samples = ray_samples.to(device)
 
             with torch.no_grad():

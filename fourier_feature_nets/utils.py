@@ -386,6 +386,14 @@ def load_model(path: str) -> torch.nn.Module:
     return model
 
 
-RenderResult = NamedTuple("RenderResult", [("color", torch.Tensor),
-                                           ("alpha", torch.Tensor),
-                                           ("depth", torch.Tensor)])
+class RenderResult(NamedTuple("RenderResult", [("color", torch.Tensor),
+                                               ("alpha", torch.Tensor),
+                                               ("depth", torch.Tensor)])):
+    @property
+    def device(self) -> torch.device:
+        return self.color.device
+
+    def to(self, *args) -> "RenderResult":
+        """Calls torch.to on each tensor in the sample."""
+        return RenderResult(*[None if tensor is None else tensor.to(*args)
+                            for tensor in self])

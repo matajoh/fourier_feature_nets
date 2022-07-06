@@ -60,14 +60,14 @@ def _main():
     torch.manual_seed(args.seed)
 
     include_alpha = args.mode == "rgba"
-    train_dataset = ffn.RayDataset.load(args.data_path, "train",
+    train_dataset = ffn.ImageDataset.load(args.data_path, "train",
+                                          args.num_samples, include_alpha,
+                                          True, color_space=args.color_space,
+                                          anneal_start=args.anneal_start,
+                                          num_anneal_steps=args.num_anneal_steps)
+    val_dataset = ffn.ImageDataset.load(args.data_path, "val",
                                         args.num_samples, include_alpha,
-                                        True, color_space=args.color_space,
-                                        anneal_start=args.anneal_start,
-                                        num_anneal_steps=args.num_anneal_steps)
-    val_dataset = ffn.RayDataset.load(args.data_path, "val",
-                                      args.num_samples, include_alpha,
-                                      False, color_space=args.color_space)
+                                        False, color_space=args.color_space)
 
     if args.make_video:
         cameras = ffn.orbit(np.array([0, 1, 0]), np.array([0, 0, -1]),
