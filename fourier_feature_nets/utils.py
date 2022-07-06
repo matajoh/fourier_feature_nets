@@ -2,7 +2,7 @@
 
 import base64
 import os
-from typing import List
+from typing import List, NamedTuple
 
 import numpy as np
 from progress.bar import Bar
@@ -384,3 +384,8 @@ def load_model(path: str) -> torch.nn.Module:
     model.load_state_dict(state_dict)
     model.eval()
     return model
+
+
+RenderResult = NamedTuple("RenderResult", [("color", torch.Tensor),
+                                           ("alpha", torch.Tensor),
+                                           ("depth", torch.Tensor)])

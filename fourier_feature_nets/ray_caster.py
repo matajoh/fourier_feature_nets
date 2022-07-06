@@ -21,12 +21,14 @@ except ImportError:
 
 from .ray_dataset import RayData, RayDataset
 from .ray_sampler import RaySampler, RaySamples
-from .utils import calculate_blend_weights, ETABar, exponential_lr_decay
+from .utils import (
+    calculate_blend_weights,
+    ETABar,
+    exponential_lr_decay,
+    RenderResult
+)
 
 
-RenderResult = NamedTuple("RenderResult", [("color", torch.Tensor),
-                                           ("alpha", torch.Tensor),
-                                           ("depth", torch.Tensor)])
 LogEntry = NamedTuple("LogEntry", [("step", int), ("timestamp", float),
                                    ("state", OrderedDict[str, torch.Tensor]),
                                    ("train_psnr", float), ("val_psnr", float)])
@@ -35,19 +37,16 @@ LogEntry = NamedTuple("LogEntry", [("step", int), ("timestamp", float),
 class Raycaster(nn.Module):
     """Implementation of a volumetric raycaster."""
 
-    def __init__(self, model: nn.Module, alpha_weight=0.1):
+    def __init__(self, model: nn.Module):
         """Constructor.
 
         Args:
             model (nn.Module): The model used to predict color and opacity.
             use_view (bool, optional): Whether to pass view information to
                                        the model. Defaults to False.
-            alpha_weight (float, optional): weight for the alpha term of the
-                                            loss
         """
         nn.Module.__init__(self)
         self.model = model
-        self._alpha_weight = alpha_weight
 
     def render(self, ray_samples: RaySamples,
                include_depth=False) -> RenderResult:
@@ -93,19 +92,12 @@ class Raycaster(nn.Module):
 
         return RenderResult(output_color, output_alpha, output_depth)
 
-    def _loss(self, rays: RayData) -> torch.Tensor:
+    def _loss(self, dataset: RayDataset, rays: RayData) -> torch.Tensor:
         device = next(self.model.parameters()).device
         rays = rays.to(device)
 
-        colors, alphas, _ = self.render(rays.samples)
-        color_loss = (colors - rays.colors).square().mean()
-        if rays.alphas is not None:
-            alpha_loss = (alphas - rays.alphas).square().mean()
-        else:
-            alpha_loss = 0
-
-        loss = color_loss + self._alpha_weight * alpha_loss
-        return loss
+        render = self.render(rays.samples, True)
+        return dataset.loss(rays, render)
 
     def render_image(self, sampler: RaySampler,
                      index: int,

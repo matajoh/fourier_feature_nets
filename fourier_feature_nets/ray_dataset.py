@@ -14,7 +14,7 @@ from torch.utils.data import Dataset
 
 from .camera_info import CameraInfo, Resolution
 from .ray_sampler import RaySampler, RaySamples
-from .utils import download_asset, ETABar
+from .utils import download_asset, ETABar, RenderResult
 
 
 class RayData(NamedTuple("RayData", [("samples", RaySamples),
@@ -74,7 +74,7 @@ class RayDataset(Dataset):
                  opacity_model: nn.Module = None,
                  batch_size=4096, color_space="RGB",
                  sparse_size=50, anneal_start=0.2,
-                 num_anneal_steps=0):
+                 num_anneal_steps=0, alpha_weight=0.1):
         """Constructor.
 
         Args:
@@ -104,6 +104,8 @@ class RayDataset(Dataset):
                                               sampling to the full range of
                                               volume intersection. Defaults
                                               to 0.
+            alpha_weight (float, optional): weight for the alpha term of the
+                                            loss
         """
         assert len(images.shape) == 4
         assert len(images) == len(cameras)
@@ -193,8 +195,10 @@ class RayDataset(Dataset):
 
         if len(alphas) > 0 and include_alpha:
             self.alphas = torch.cat(alphas)
+            self.alpha_weight = alpha_weight
         else:
             self.alphas = None
+            self.alpha_weight = 0
 
         self.colors = torch.cat(colors)
 
@@ -251,6 +255,23 @@ class RayDataset(Dataset):
     def cameras(self) -> List[CameraInfo]:
         """Camera information."""
         return self.sampler.cameras
+
+    def loss(self, rays: RayData, render: RenderResult) -> torch.Tensor:
+        """Compute the dataset loss for the prediction.
+
+        Args:
+            actual (RayData): The rays to render
+            predicted (RenderResult): The ray rendering result
+
+        Returns:
+            torch.Tensor: a scalar loss tensor
+        """
+        color_loss = (rays.colors - render.colors).square().mean()
+        if self.alpha_weight > 0 and rays.alphas is not None:
+            alpha_loss = (rays.alphas - render.alphas).square().mean()
+            return color_loss + self.alpha_weight * alpha_loss
+
+        return color_loss
 
     def index_for_camera(self, camera: int) -> List[int]:
         """Returns a pixel index for the camera.
