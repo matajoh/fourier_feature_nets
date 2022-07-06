@@ -3,7 +3,7 @@
 import copy
 import os
 import time
-from typing import NamedTuple, OrderedDict
+from typing import List, NamedTuple, OrderedDict
 
 import cv2
 from matplotlib.pyplot import get_cmap
@@ -342,7 +342,7 @@ class Raycaster(nn.Module):
             weight_decay: float,
             video_sampler: RaySampler = None,
             act_sampler: RaySampler = None,
-            disable_aml=False):
+            disable_aml=False) -> List[LogEntry]:
         """Fits the volumetric model using the raycaster.
 
         Args:

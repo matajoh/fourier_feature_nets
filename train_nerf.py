@@ -138,8 +138,10 @@ def _main():
         file.write("\n\n")
         file.write("\t".join(["step", "timestamp", "psnr_train", "psnr_val"]))
         file.write("\t")
-        for line in log:
-            file.write("\t".join([str(val) for val in line]) + "\n")
+        for entry in log:
+            file.write("\t".join([str(val) for val in [
+                entry.step, entry.timestamp, entry.train_psnr, entry.val_psnr
+            ]]) + "\n")
 
     sp_path = os.path.join(args.results_dir, "nerf.html")
     raycaster.to_scenepic(val_dataset).save_as_html(sp_path)
