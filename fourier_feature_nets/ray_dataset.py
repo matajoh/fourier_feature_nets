@@ -73,7 +73,8 @@ class RayDataset(Dataset):
                  include_alpha=True, stratified=False,
                  opacity_model: nn.Module = None,
                  batch_size=4096, color_space="RGB",
-                 sparse_size=50):
+                 sparse_size=50, anneal_start=0.2,
+                 num_anneal_steps=0):
         """Constructor.
 
         Args:
@@ -97,6 +98,12 @@ class RayDataset(Dataset):
                                          "RGB".
             sparse_size (int, optional): The vertical resolution of
                                          the sparse sampling version.
+            anneal_start (float, optiona): Starting value for the sample space
+                                           annealing. Defaults to 0.2.
+            num_anneal_steps (int, optional): Steps over which to anneal
+                                              sampling to the full range of
+                                              volume intersection. Defaults
+                                              to 0.
         """
         assert len(images.shape) == 4
         assert len(images) == len(cameras)
@@ -110,7 +117,8 @@ class RayDataset(Dataset):
         self.include_alpha = include_alpha
         self.subsample_index = None
         self.sampler = RaySampler(bounds, cameras, num_samples, stratified,
-                                  opacity_model, batch_size)
+                                  opacity_model, batch_size, anneal_start,
+                                  num_anneal_steps)
 
         source_resolution = np.array([self.image_width, self.image_height],
                                      np.float32)
@@ -295,7 +303,7 @@ class RayDataset(Dataset):
         else:
             raise NotImplementedError("Unsupported sampling mode")
 
-        return self[list(range(start, end))]
+        return self.get_rays(list(range(start, end)), None)
 
     def __len__(self) -> int:
         """The number of rays in the dataset."""
@@ -372,8 +380,9 @@ class RayDataset(Dataset):
 
         return self.subset(list(samples), num_samples, stratified)
 
-    def __getitem__(self,
-                    idx: Union[List[int], torch.Tensor]) -> RayData:
+    def get_rays(self,
+                 idx: Union[List[int], torch.Tensor],
+                 step: int = None) -> RayData:
         """Returns samples from the selected rays."""
         if torch.is_tensor(idx):
             idx = idx.tolist()
@@ -393,7 +402,7 @@ class RayDataset(Dataset):
                    if i % self.sampler.rays_per_camera in self.subsample_index]
 
         idx = self.sampler.to_valid(idx)
-        samples = self.sampler[idx]
+        samples = self.sampler.sample(idx, step)
         colors = self.colors[idx]
         if self.alphas is None or self.mode == RayDataset.Mode.Dilate:
             alphas = None
@@ -411,7 +420,8 @@ class RayDataset(Dataset):
              include_alpha: bool, stratified: bool,
              opacity_model: nn.Module = None,
              batch_size=4096, color_space="RGB",
-             sparse_size=50) -> "RayDataset":
+             sparse_size=50, anneal_start=0.2,
+             num_anneal_steps=0) -> "RayDataset":
         """Loads a dataset from an NPZ file.
 
         Description:
@@ -438,6 +448,12 @@ class RayDataset(Dataset):
             batch_size (int, optional): Batch size to use when sampling the
                                         opacity model.
             sparse_size (int, optional): Resolution for sparse sampling.
+            anneal_start (float, optiona): Starting value for the sample space
+                                           annealing. Defaults to 0.2.
+            num_anneal_steps (int, optional): Steps over which to anneal
+                                              sampling to the full range of
+                                              volume intersection. Defaults
+                                              to 0.
 
         Returns:
             RayDataset: A dataset made from the camera and image data
@@ -481,7 +497,8 @@ class RayDataset(Dataset):
                                                         extrinsics))]
         return RayDataset(split, images, bounds, cameras, num_samples,
                           include_alpha, stratified, opacity_model,
-                          batch_size, color_space, sparse_size)
+                          batch_size, color_space, sparse_size,
+                          anneal_start, num_anneal_steps)
 
     def _subsample_rays(self, resolution: int) -> List[int]:
         num_x_samples = resolution * self.image_width // self.image_height
@@ -560,7 +577,7 @@ class RayDataset(Dataset):
             self.mode = RayDataset.Mode.Full
             cam_start = cam * self.sampler.rays_per_camera
             index = [cam_start + i for i in index]
-            entry = self[index]
+            entry = self.get_rays(index)
 
             colors = entry.colors.unsqueeze(1)
             colors = colors.expand(-1, self.num_samples, -1)
