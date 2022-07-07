@@ -72,7 +72,7 @@ def _main():
     else:
         opacity_model = model
 
-    raycaster = ffn.Raycaster(model, isinstance(model, ffn.NeRF))
+    raycaster = ffn.Raycaster(model)
     sampler = ffn.RaySampler(bounds_transform, orbit_cameras,
                              args.num_samples, False,
                              opacity_model, args.batch_size)
@@ -80,14 +80,17 @@ def _main():
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
+    progress = ffn.ETABar("Rendering", max=args.num_frames)
     with torch.no_grad():
         for frame in range(args.num_frames):
-            print(frame, "/", args.num_frames)
+            progress.next()
             image = raycaster.render_image(sampler, frame, args.batch_size)
             path = os.path.join(args.output_dir,
-                                "frame_{:04d}.png".format(frame))
+                                "frame_{:05d}.png".format(frame))
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             cv2.imwrite(path, image)
+
+    progress.finish()
 
 
 if __name__ == "__main__":

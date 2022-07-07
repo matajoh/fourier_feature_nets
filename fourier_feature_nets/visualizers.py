@@ -137,3 +137,49 @@ class ActivationVisualizer(Visualizer):
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         cv2.imwrite(path, image)
         self._index += 1
+
+
+class ComparisonVisualizer(Visualizer):
+    def __init__(self, results_dir: str, num_steps: int,
+                 num_frames: int,
+                 train: ImageDataset, val: ImageDataset):
+        compare_dir = os.path.join(results_dir, "compare")
+        os.makedirs(compare_dir, exist_ok=True)
+        assert train.num_cameras == val.num_cameras
+        self._output_dir = compare_dir
+        self._train = train
+        self._val = val
+        self._interval = num_steps // num_frames
+        self._index = 0
+
+    def visualize(self, step: int, render: ImageRender,
+                  _: ActivationRender):
+        if step % self._interval != 0:
+            return
+
+        num_cameras = self._train.num_cameras
+        resolution = self._train.cameras[0].resolution
+        width = resolution.width * 4
+        height = resolution.height * num_cameras
+        frame = np.zeros((height, width, 3), np.uint8)
+        c = [i * resolution.width for i in range(5)]
+        for camera in range(num_cameras):
+            r0 = camera * resolution.height
+            r1 = r0 + resolution.height
+            samples = self._train.rays_for_camera(camera)
+            act = self._train.render(samples)
+            pred = render(samples, False)
+            frame[r0:r1, c[0]:c[1]] = self._train.to_image(camera, act.color)
+            frame[r0:r1, c[1]:c[2]] = self._train.to_image(camera, pred.color)
+
+            samples = self._val.rays_for_camera(camera)
+            act = self._val.render(samples)
+            pred = render(samples, False)
+            frame[r0:r1, c[2]:c[3]] = self._val.to_image(camera, act.color)
+            frame[r0:r1, c[3]:c[4]] = self._val.to_image(camera, pred.color)
+
+        name = "frame_{:05d}.png".format(self._index)
+        path = os.path.join(self._output_dir, name)
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(path, frame)
+        self._index += 1

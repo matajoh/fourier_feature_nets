@@ -1,8 +1,10 @@
 """Module providing dataset classes for use in training NeRF models."""
 
-from typing import List, Set
+from abc import abstractmethod
+from typing import List, Set, Union
 
 import numpy as np
+import scenepic as sp
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
@@ -15,7 +17,8 @@ from .utils import ETABar, RenderResult
 
 class RegularizerDataset(Dataset, RayDataset):
     def __init__(self, label: str, bounds: np.ndarray,
-                 cameras: List[CameraInfo], num_samples: int, patch_size: int,
+                 cameras: List[CameraInfo], num_samples: int,
+                 num_patches: int, patch_size: int,
                  stratified=False, opacity_model: nn.Module = None,
                  batch_size=4096, color_space="RGB",
                  anneal_start=0.2, num_anneal_steps=0):
@@ -52,56 +55,59 @@ class RegularizerDataset(Dataset, RayDataset):
         self._cameras = cameras
         self._color_space = color_space
         self._subsample_index = None
+        self._mode = RayDataset.Mode.Full
         self._sampler = RaySampler(bounds, cameras, num_samples, stratified,
                                    opacity_model, batch_size, anneal_start,
                                    num_anneal_steps)
 
-        colors = []
-        alphas = []
-        patch_index = []
+        grid_rows = int(np.sqrt(num_patches))
+        grid_cols = num_patches // grid_rows
+        if grid_rows * grid_cols < num_patches:
+            grid_cols += 1
+
+        self.patches_per_camera = num_patches
+        self.patch_size = patch_size
+
+        patches_index = []
         bar = ETABar("Indexing", max=len(cameras))
-        for camera in cameras:
+        for i, camera in enumerate(cameras):
             bar.next()
 
-            # select patches distributed evenly
-            # perturb the positions
+            resolution = camera.resolution
+            patch_points = []
+            for r in range(patch_size):
+                for c in range(patch_size):
+                    patch_points.append(r * resolution.width + c)
+
+            patch_points = torch.LongTensor(patch_points)
+
+            cell_height = (resolution.height - patch_size) // grid_rows
+            cell_width = (resolution.width - patch_size) // grid_cols
+
+            x_perturb = max(cell_width - patch_size, patch_size // 2)
+            y_perturb = max(cell_height - patch_size, patch_size // 2)
+
+            x, y = np.meshgrid(np.arange(grid_cols), np.arange(grid_rows))
+            x = (x * cell_width).reshape(-1)
+            y = (y * cell_height).reshape(-1)
+
+            x += np.random.random_integers(0, x_perturb, x.shape)
+            y += np.random.random_integers(0, y_perturb, y.shape)
+
+            index = np.arange(len(x))
+            np.random.shuffle(index)
+            index = index[:num_patches]
+            offset = i * self.sampler.rays_per_camera
+            patches = []
+            for r, c in zip(y[index], x[index]):
+                patch_offset = r * resolution.width + c
+                patches.append(patch_points + offset + patch_offset)
             
-            color = image[..., :3]
-            if color_space == "YCrCb":
-                color = cv2.cvtColor(color, cv2.COLOR_RGB2YCrCb)
-
-            color = color.astype(np.float32) / 255
-            color = color[self.sampler.points[:, 1],
-                          self.sampler.points[:, 0]]
-            colors.append(torch.from_numpy(color))
-
-            offset = len(crop_index) * self.sampler.rays_per_camera
-            if image.shape[-1] == 4:
-                alpha = image[..., 3].astype(np.float32) / 255
-                mask = (alpha > 0).astype(np.uint8)
-
-                alpha = alpha[self.sampler.points[:, 1],
-                              self.sampler.points[:, 0]]
-                alphas.append(torch.from_numpy(alpha))
-
-                mask = cv2.dilate(mask, element)
-                mask = mask[self.sampler.points[:, 1],
-                            self.sampler.points[:, 0]]
-                dilate_points, = np.nonzero(mask)
-                dilate_index.append(torch.from_numpy(dilate_points) + offset)
-                start = num_dilate
-                end = start + len(dilate_points)
-                num_dilate = end
-                self.dilate_ranges.append((start, end))
-
-            crop_index.append(crop_points + offset)
-            sparse_index.append(sparse_points + offset)
+            patches = torch.stack(patches)
+            patches_index.append(patches)
 
         bar.finish()
-        self.crop_index = torch.cat(crop_index)
-        self.sparse_index = torch.cat(sparse_index)
-        self.dilate_index = torch.cat(dilate_index)
-
+        self.patches_index = torch.cat(patches_index)
 
     @property
     def num_cameras(self) -> int:
@@ -136,21 +142,21 @@ class RegularizerDataset(Dataset, RayDataset):
     @property
     def mode(self) -> RayDataset.Mode:
         """Sampling mode of the dataset."""
-        return RayDataset.Mode.Patch
+        return self._mode
 
     @mode.setter
-    def mode(self, _: RayDataset.Mode):
+    def mode(self, mode: RayDataset.Mode):
         """Sampling mode of the dataset."""
-        raise NotImplementedError("only patch mode is supported")
+        self._mode = mode
 
     def rays_for_camera(self, camera: int) -> RaySamples:
         """Returns ray samples for the specified camera."""
         if self.mode == RayDataset.Mode.Patch:
-            start = camera * self.patch_rays_per_camera
-            end = start + self.patch_rays_per_camera
+            start = camera * self.patches_per_camera
+            end = start + self.patches_per_camera
         elif self.mode == RayDataset.Mode.Full:
-            start = camera * self.sampler.rays_per_camera
-            end = start + self.sampler.rays_per_camera
+            start = camera * self._sampler.rays_per_camera
+            end = start + self._sampler.rays_per_camera
         else:
             raise NotImplementedError("Unsupported sampling mode")
 
@@ -166,7 +172,6 @@ class RegularizerDataset(Dataset, RayDataset):
         """Set of pixel indices in an image to sample."""
         self._subsample_index = index
 
-    @abstractmethod
     def loss(self, rays: RaySamples, render: RenderResult) -> torch.Tensor:
         """Compute the dataset loss for the prediction.
 
@@ -177,8 +182,8 @@ class RegularizerDataset(Dataset, RayDataset):
         Returns:
             torch.Tensor: a scalar loss tensor
         """
+        raise NotImplementedError("wip")
 
-    @abstractmethod
     def get_rays(self,
                  idx: Union[List[int], torch.Tensor],
                  step: int = None) -> RaySamples:
@@ -191,8 +196,23 @@ class RegularizerDataset(Dataset, RayDataset):
         Returns:
             (RaySamples): Returns ray data
         """
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
 
-    @abstractmethod
+        if self.mode == RayDataset.Mode.Patch:
+            idx = self.patches_index[idx]
+            idx = torch.cat(idx).tolist()
+
+        if not isinstance(idx, list):
+            idx = [idx]
+
+        if self.subsample_index:
+            idx = [i for i in idx
+                   if i % self._sampler.rays_per_camera in self.subsample_index]
+
+        idx = self._sampler.to_valid(idx)
+        return self._sampler.sample(idx, step)
+
     def render(self, rays: RaySamples) -> RenderResult:
         """Returns a (ground truth) render of the rays.
 
@@ -202,8 +222,8 @@ class RegularizerDataset(Dataset, RayDataset):
         Returns:
             RenderResult: the ground truth render
         """
+        raise NotImplementedError("not supported")
 
-    @abstractmethod
     def index_for_camera(self, camera: int) -> List[int]:
         """Returns a pixel index for the camera.
 
@@ -217,8 +237,22 @@ class RegularizerDataset(Dataset, RayDataset):
         Returns:
             List[int]: index into the rays for this camera
         """
+        camera_start = camera * self._sampler.rays_per_camera
+        if self.mode == RayDataset.Mode.Patch:
+            start = camera * self.patches_per_camera
+            end = start + self.patches_per_camera
+            idx = self.patches_index[start:end]
+            idx = torch.cat(idx).tolist()
+        elif self.mode == RayDataset.Mode.Full:
+            camera_end = camera_start + self.sampler.rays_per_camera
+            idx = list(range(camera_start, camera_end))
+        else:
+            raise NotImplementedError("Unsupported sampling mode")
 
-    @abstractmethod
+        idx = self.sampler.to_valid(idx)
+        idx = [i - camera_start for i in idx]
+        return idx
+
     def to_valid(self, idx: List[int]) -> List[int]:
         """Filters the list of ray indices to include only valid rays.
 
@@ -232,59 +266,18 @@ class RegularizerDataset(Dataset, RayDataset):
         Returns:
             List[int]: a filtered list of valid rays
         """
+        return self._sampler.to_valid(idx)
 
-    @abstractmethod
-    def to_image(self, camera: int, colors: np.ndarray) -> np.ndarray:
-        """Creates an image given the camera and the compute pixel colors.
-
-        Args:
-            camera (int): The camera index. Needed to handle special patterns,
-                          i.e. for Dilate mode.
-            colors (np.ndarray): The computed colors, one per ray, in the order
-                                 returned by the dataset.
-
-        Returns:
-            np.ndarray: A (H,W,3) uint8 RGB tensor
-        """
-
-    def sample_cameras(self, num_cameras: int,
-                       num_samples: int,
-                       stratified: bool) -> "RayDataset":
-        """Samples cameras from the dataset and returns the subset.
-
-        Description:
-            Cameras are sampled such that they are as equidistant as possible.
-
-        Args:
-            num_cameras (int): Number of cameras to sample.
-            num_samples (int): Number of samples per ray.
-            stratified (bool): Whether to use stratified sampling
-
-        Returns:
-            RayDataset: a subset of the dataset with the sampled cameras
-        """
-        if self.num_cameras < num_cameras:
-            samples = list(range(self.num_cameras))
-        else:
-            positions = np.concatenate([cam.position for cam in self.sampler.cameras])
-            samples = set([0])
-            all_directions = set(range(len(positions)))
-            while len(samples) < num_cameras:
-                sample_positions = positions[list(samples)]
-                distances = positions[:, None, :] - sample_positions[None, :, :]
-                distances = np.square(distances).sum(-1).min(-1)
-                unchosen = np.array(list(all_directions - samples))
-                distances = np.array(distances[unchosen], np.float32)
-                choice = unchosen[distances.argmax()]
-                samples.add(choice)
-
-        return self.subset(list(samples), num_samples, stratified)
-
-    @abstractmethod
     def __len__(self) -> int:
         """The number of rays in the dataset."""
+        if self.mode == RayDataset.Mode.Patch:
+            return len(self.patches_index) * len(self.patches_index[0])
 
-    @abstractmethod
+        if self.mode == RayDataset.Mode.Full:
+            return len(self._sampler)
+
+        raise NotImplementedError("Unsupported sampling mode")        
+
     def subset(self, cameras: List[int],
                num_samples: int,
                stratified: bool) -> "RayDataset":
@@ -300,7 +293,19 @@ class RegularizerDataset(Dataset, RayDataset):
         Returns:
             RayDataset: New dataset with the subset of cameras
         """
+        return RegularizerDataset(self.label,
+                                  self._sampler.bounds,
+                                  [self._sampler.cameras[i] for i in cameras],
+                                  num_samples,
+                                  self.patches_per_camera,
+                                  self.patch_size,
+                                  stratified,
+                                  self._sampler.opacity_model,
+                                  self._sampler.batch_size,
+                                  self.color_space,
+                                  self._sampler.anneal_start,
+                                  self._sampler.num_anneal_steps)
 
-    @abstractmethod
     def to_scenepic(self) -> sp.Scene:
         """Creates a ray sampling visualization ScenePic for the dataset."""
+        return None

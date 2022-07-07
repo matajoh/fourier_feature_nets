@@ -41,8 +41,6 @@ class Raycaster(nn.Module):
 
         Args:
             model (nn.Module): The model used to predict color and opacity.
-            use_view (bool, optional): Whether to pass view information to
-                                       the model. Defaults to False.
         """
         nn.Module.__init__(self)
         self.model = model

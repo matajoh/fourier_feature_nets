@@ -92,6 +92,7 @@ class ImageDataset(Dataset, RayDataset):
         sparse_points = torch.LongTensor(self._subsample_rays(sparse_size))
         sparse_height = sparse_size
         sparse_width = sparse_size * self.image_width // self.image_height
+        self.sparse_size = sparse_size
         self.sparse_resolution = sparse_width, sparse_height
         self.sparse_rays_per_camera = len(sparse_points)
 
@@ -289,7 +290,11 @@ class ImageDataset(Dataset, RayDataset):
                             stratified,
                             self.sampler.opacity_model,
                             self.sampler.batch_size,
-                            self.color_space)
+                            self.color_space,
+                            self.sparse_size,
+                            self.sampler.anneal_start,
+                            self.sampler.num_anneal_steps,
+                            self.alpha_weight)
 
     def get_rays(self,
                  idx: Union[List[int], torch.Tensor],

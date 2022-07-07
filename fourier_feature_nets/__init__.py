@@ -20,6 +20,7 @@ from .utils import ETABar, interpolate_bilinear, load_model, orbit
 from .version import __version__
 from .visualizers import (
     ActivationVisualizer,
+    ComparisonVisualizer,
     EvaluationVisualizer,
     OrbitVideoVisualizer
 )
@@ -50,5 +51,6 @@ __all__ = ["__version__",
            "SignalDataset",
            "Triangulation",
            "ActivationVisualizer",
+           "ComparisonVisualizer",
            "EvaluationVisualizer",
            "OrbitVideoVisualizer"]
