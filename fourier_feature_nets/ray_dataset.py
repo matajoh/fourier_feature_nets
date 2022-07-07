@@ -48,7 +48,7 @@ class RayDataset(ABC):
 
     @property
     @abstractmethod
-    def label() -> str:
+    def label(self) -> str:
         """A label for the dataset."""
 
     @property
