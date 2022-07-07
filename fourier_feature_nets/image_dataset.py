@@ -1,3 +1,5 @@
+"""Module providing an image dataset for training NeRF models."""
+
 import os
 from typing import List, Set, Union
 
@@ -16,7 +18,7 @@ from .utils import download_asset, ETABar, RenderResult
 
 
 class ImageDataset(Dataset, RayDataset):
-    """Dataset for sampling from rays cast into a volume."""
+    """Dataset built from images for sampling from rays cast into a volume."""
 
     def __init__(self, label: str, images: np.ndarray, bounds: np.ndarray,
                  cameras: List[CameraInfo], num_samples: int,
@@ -178,17 +180,6 @@ class ImageDataset(Dataset, RayDataset):
     @property
     def images(self) -> List[np.ndarray]:
         return self._images
-
-    def to_image(self, camera: int, colors: np.ndarray) -> np.ndarray:
-        pixels = np.zeros((self.image_height*self.image_width, 3), np.float32)
-        index = self.index_for_camera(camera)
-        pixels[index] = colors
-        pixels = pixels.reshape(self.image_height, self.image_width, 3)
-        pixels = (pixels * 255).astype(np.uint8)
-        if self._color_space == "YCrCb":
-            pixels = cv2.cvtColor(pixels, cv2.COLOR_YCrCB2RGB)
-
-        return pixels
 
     @property
     def label(self) -> str:

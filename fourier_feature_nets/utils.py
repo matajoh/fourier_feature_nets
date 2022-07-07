@@ -397,3 +397,8 @@ class RenderResult(NamedTuple("RenderResult", [("color", torch.Tensor),
         """Calls torch.to on each tensor in the sample."""
         return RenderResult(*[None if tensor is None else tensor.to(*args)
                             for tensor in self])
+
+    def numpy(self) -> "RenderResult":
+        """Moves all of the tensors from pytorch to numpy."""
+        return RenderResult(*[None if tensor is None else tensor.cpu().numpy()
+                              for tensor in self])

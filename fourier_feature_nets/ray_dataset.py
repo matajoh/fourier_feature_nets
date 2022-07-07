@@ -1,9 +1,10 @@
-"""Module providing dataset classes for use in training NeRF models."""
+"""Module providing a dataset prototype for use in training NeRF models."""
 
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import List, Set, Union
 
+import cv2
 import numpy as np
 import scenepic as sp
 import torch
@@ -152,7 +153,6 @@ class RayDataset(ABC):
             List[int]: a filtered list of valid rays
         """
 
-    @abstractmethod
     def to_image(self, camera: int, colors: np.ndarray) -> np.ndarray:
         """Creates an image given the camera and the compute pixel colors.
 
@@ -165,6 +165,18 @@ class RayDataset(ABC):
         Returns:
             np.ndarray: A (H,W,3) uint8 RGB tensor
         """
+        if len(colors.shape) == 1:
+            colors = colors[..., np.newaxis]
+
+        pixels = np.zeros((self.image_height*self.image_width, 3), np.float32)
+        index = self.index_for_camera(camera)
+        pixels[index] = colors
+        pixels = pixels.reshape(self.image_height, self.image_width, 3)
+        pixels = (pixels * 255).astype(np.uint8)
+        if self._color_space == "YCrCb":
+            pixels = cv2.cvtColor(pixels, cv2.COLOR_YCrCB2RGB)
+
+        return pixels
 
     def sample_cameras(self, num_cameras: int,
                        num_samples: int,

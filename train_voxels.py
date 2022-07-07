@@ -69,19 +69,26 @@ def _main():
                                         args.num_samples, include_alpha,
                                         False, color_space=args.color_space)
 
-    if args.make_video:
-        cameras = ffn.orbit(np.array([0, 1, 0]), np.array([0, 0, -1]),
-                            args.num_frames, 40,
-                            train_dataset.resolution.square(), 4)
-        bounds = np.eye(4, dtype=np.float32) * 2
-        video_sampler = ffn.RaySampler(bounds, cameras, args.num_samples)
-        image_interval = args.num_steps // args.num_frames
-    else:
-        video_sampler = None
-        image_interval = args.image_interval
-
     if train_dataset is None:
         return 1
+
+    visualizers = []
+    if args.make_video:
+        resolution = train_dataset.cameras[0].resolution
+        visualizers.append(ffn.OrbitVideoVisualizer(
+            args.results_dir,
+            args.num_steps,
+            resolution,
+            args.num_frames,
+            args.num_samples,
+            args.color_space
+        ))
+    else:
+        visualizers.append(ffn.EvaluationVisualizer(
+            args.results_dir,
+            val_dataset,
+            args.image_interval
+        ))
 
     if args.mode == "dilate":
         train_dataset.mode = ffn.RayDataset.Mode.Dilate
@@ -92,11 +99,10 @@ def _main():
     raycaster = ffn.Raycaster(model)
     raycaster.to(args.device)
 
-    log = raycaster.fit(train_dataset, val_dataset, args.results_dir,
-                        args.batch_size, args.learning_rate,
-                        args.num_steps, image_interval, 0,
+    log = raycaster.fit(train_dataset, val_dataset, args.batch_size,
+                        args.learning_rate, args.num_steps, 0,
                         args.report_interval, args.decay_rate, args.decay_steps,
-                        0.0, video_sampler)
+                        0.0, visualizers)
 
     model.save(os.path.join(args.results_dir, "voxels.pt"))
     with open(os.path.join(args.results_dir, "log.txt"), "w") as file:

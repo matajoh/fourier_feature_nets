@@ -18,6 +18,11 @@ from .ray_sampler import RaySampler, RaySamples
 from .signal_dataset import SignalDataset
 from .utils import ETABar, interpolate_bilinear, load_model, orbit
 from .version import __version__
+from .visualizers import (
+    ActivationVisualizer,
+    EvaluationVisualizer,
+    OrbitVideoVisualizer
+)
 from .voxels_model import Voxels
 
 __all__ = ["__version__",
@@ -43,4 +48,7 @@ __all__ = ["__version__",
            "RayDataset",
            "Resolution",
            "SignalDataset",
-           "Triangulation"]
+           "Triangulation",
+           "ActivationVisualizer",
+           "EvaluationVisualizer",
+           "OrbitVideoVisualizer"]
