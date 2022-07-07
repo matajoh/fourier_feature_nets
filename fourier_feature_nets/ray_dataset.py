@@ -168,10 +168,11 @@ class RayDataset(ABC):
         if len(colors.shape) == 1:
             colors = colors[..., np.newaxis]
 
-        pixels = np.zeros((self.image_height*self.image_width, 3), np.float32)
+        resolution = self.cameras[camera].resolution
+        pixels = np.zeros((resolution.width*resolution.height, 3), np.float32)
         index = self.index_for_camera(camera)
         pixels[index] = colors
-        pixels = pixels.reshape(self.image_height, self.image_width, 3)
+        pixels = pixels.reshape(resolution.height, resolution.width, 3)
         pixels = (pixels * 255).astype(np.uint8)
         if self._color_space == "YCrCb":
             pixels = cv2.cvtColor(pixels, cv2.COLOR_YCrCB2RGB)

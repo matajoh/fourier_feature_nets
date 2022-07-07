@@ -1,6 +1,7 @@
 """Utility module."""
 
 import base64
+import math
 import os
 from typing import List, NamedTuple
 
@@ -294,6 +295,99 @@ def orbit(up_dir: np.ndarray, forward_dir: np.ndarray, num_frames: int,
                                                                frame_azi)
 
         extrinsics = rotate @ elevate @ init_ext
+        camera = CameraInfo.create("cam{}".format(len(camera_info)),
+                                   resolution,
+                                   intrinsics, extrinsics)
+        camera_info.append(camera)
+
+    return camera_info
+
+
+def shuffle_positions(positions: np.ndarray, random=True) -> List[int]:
+    """Shuffles a list of positions.
+
+    Description:
+        Shuffles the positions in order such that each subsequent position
+        is likely to be far from the preceding positions.
+
+    Args:
+        positions (np.ndarray): the positions in space
+        random (bool, optional): whether the positions should be chosen at
+                                 random (otherwise the farthest away is
+                                 always chosen). Defaults to True.
+
+    Returns:
+        List[int]: a shuffling of the positions
+    """
+    samples = [0]
+    all_positions = set(range(len(positions)))
+    while len(samples) < len(all_positions):
+        sample_positions = positions[samples]
+        distances = positions[:, None, :] - sample_positions[None, :, :]
+        distances = np.square(distances).sum(-1).min(-1)
+        unchosen = np.array(list(all_positions - set(samples)))
+        if random:
+            weights = np.array(distances[unchosen], np.float32)
+            weights = weights / weights.sum()
+            choice = np.random.choice(unchosen, p=weights)
+        else:
+            distances = distances[unchosen]
+            choice = unchosen[distances.argmax()]
+
+        samples.append(choice)
+
+    return list(samples)
+
+
+def fibonacci_hemisphere(num_samples: int) -> np.ndarray:
+    points = []
+    phi = math.pi * (3. - math.sqrt(5.))  # golden angle in radians
+
+    for i in range(num_samples):
+        y = 1 - (i / float(num_samples - 1))  # y goes from 1 to 0
+        radius = math.sqrt(1 - y * y)  # radius at y
+
+        theta = phi * i  # golden angle increment
+
+        x = math.cos(theta) * radius
+        z = math.sin(theta) * radius
+
+        points.append((x, y, z))
+
+    points = np.stack(points)
+    index = shuffle_positions(points)
+    return points[index]
+
+
+def hemisphere(up_dir: np.ndarray, forward_dir: np.ndarray, num_cameras: int,
+               fov_y_degrees: float, resolution: Resolution,
+               distance: float, pos_noise=0.1) -> List[CameraInfo]:
+    directions = fibonacci_hemisphere(num_cameras)
+    right_dir = np.cross(up_dir, forward_dir)
+
+    fov_y = fov_y_degrees * np.pi / 180
+    focal_length = .5 * resolution.width / np.tan(.5 * fov_y)
+
+    intrinsics = np.array([
+        focal_length, 0, resolution.width / 2,
+        0, focal_length, resolution.height / 2,
+        0, 0, 1
+    ], np.float32).reshape(3, 3)
+
+    camera_info = []
+    for direction in directions:
+        position = direction * distance
+        position += np.random.normal(0, pos_noise, size=3)
+        distance = np.linalg.norm(position)
+        azimuth = math.atan2(direction[0], direction[2])
+        altitude = math.asin(direction[1])
+        pos = sp.Transforms.translate([0, 0, distance])
+        elevate = sp.Transforms.rotation_matrix_from_axis_angle(right_dir,
+                                                                altitude)
+        rotate = sp.Transforms.rotation_matrix_from_axis_angle(up_dir,
+                                                               azimuth)
+
+        extrinsics = rotate @ elevate @ pos
         camera = CameraInfo.create("cam{}".format(len(camera_info)),
                                    resolution,
                                    intrinsics, extrinsics)

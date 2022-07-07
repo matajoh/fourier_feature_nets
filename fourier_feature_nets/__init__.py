@@ -15,8 +15,9 @@ from .pixel_dataset import PixelDataset
 from .ray_caster import Raycaster
 from .ray_dataset import RayDataset
 from .ray_sampler import RaySampler, RaySamples
+from .patches_dataset import PatchesDataset
 from .signal_dataset import SignalDataset
-from .utils import ETABar, interpolate_bilinear, load_model, orbit
+from .utils import ETABar, hemisphere, interpolate_bilinear, load_model, orbit
 from .version import __version__
 from .visualizers import (
     ActivationVisualizer,
@@ -39,6 +40,7 @@ __all__ = ["__version__",
            "ImageDataset",
            "Voxels",
            "interpolate_bilinear",
+           "hemisphere",
            "load_model",
            "orbit",
            "OcTree",
@@ -48,6 +50,7 @@ __all__ = ["__version__",
            "RaySamples",
            "RayDataset",
            "Resolution",
+           "PatchesDataset",
            "SignalDataset",
            "Triangulation",
            "ActivationVisualizer",

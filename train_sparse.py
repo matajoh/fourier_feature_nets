@@ -49,10 +49,30 @@ def _parse_args():
     parser.add_argument("--num-anneal-steps", type=int, default=0,
                         help=("Steps over which to anneal sampling to the full"
                               "range of volume intersection."))
+    parser.add_argument("--up-dir", default="y+",
+                        choices=list(VECTORS.keys()),
+                        help="The direction that is 'up'")
+    parser.add_argument("--forward-dir", default="z-",
+                        choices=list(VECTORS.keys()),
+                        help="The direction that is 'forward'")
+    parser.add_argument("--num-patch-cameras", type=int, default=100,
+                        help="Number of cameras to use for patch sampling")
+    parser.add_argument("--num-patches", type=int, default=256,
+                        help="Number of patches per patch camera")
+    parser.add_argument("--patch-size", type=int, default=8,
+                        help="size of the patches")
 
     return parser.parse_args()
 
-# refactor this to be a sparse experiment.
+
+VECTORS = {
+    "x+": np.array([1, 0, 0], np.float32),
+    "x-": np.array([-1, 0, 0], np.float32),
+    "y+": np.array([0, 1, 0], np.float32),
+    "y-": np.array([0, -1, 0], np.float32),
+    "z+": np.array([0, 0, 1], np.float32),
+    "z-": np.array([0, 0, -1], np.float32),
+}
 
 
 def _main():
@@ -67,10 +87,23 @@ def _main():
                                     anneal_start=args.anneal_start,
                                     num_anneal_steps=args.num_anneal_steps)
 
+    patch_cameras = ffn.hemisphere(VECTORS[args.up_dir],
+                                   VECTORS[args.forward_dir],
+                                   100, dataset.cameras[0].fov_y_degrees,
+                                   dataset.cameras[0].resolution, 4)
+    patches = ffn.PatchesDataset("patches", dataset.sampler.bounds,
+                                 patch_cameras, args.num_samples,
+                                 args.num_patches, args.patch_size, True,
+                                 color_space=args.color_space,
+                                 anneal_start=args.anneal_start,
+                                 num_anneal_steps=args.num_anneal_steps)
+
+    patches.to_scenepic().save_as_html("patches.html")
+
     assert len(dataset) > 2 * args.num_images
 
     dataset = dataset.sample_cameras(args.num_images * 2, args.num_samples,
-                                     True) 
+                                     True)
 
     index = list(range(2 * args.num_images))
 
