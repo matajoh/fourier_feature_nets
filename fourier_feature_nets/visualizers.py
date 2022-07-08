@@ -7,7 +7,6 @@ import numpy as np
 
 from .camera_info import Resolution
 from .image_dataset import ImageDataset
-from .patches_dataset import PatchesDataset
 from .ray_sampler import RaySampler, RaySamples
 from .utils import orbit, RenderResult
 
@@ -183,34 +182,4 @@ class ComparisonVisualizer(Visualizer):
         path = os.path.join(self._output_dir, name)
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         cv2.imwrite(path, frame)
-        self._index += 1
-
-
-class PatchVisualizer(Visualizer):
-    def __init__(self, results_dir: str, dataset: PatchesDataset,
-                 interval: int, max_depth=10):
-        path = os.path.join(results_dir, "patches")
-        os.makedirs(path, exist_ok=True)
-        self._output_dir = path
-        self._dataset = dataset
-        self._interval = interval
-        self._index = 0
-        self._max_depth = max_depth
-
-    def visualize(self, step: int, render: ImageRender,
-                  _: ActivationRender):
-        if step % self._interval != 0:
-            return
-
-        camera = self._index % self._dataset.num_cameras
-        samples = self._dataset.rays_for_camera(camera)
-        pred = render(samples, True)
-
-        color = self._dataset.to_image(camera, pred.color)
-        depth = self._dataset.to_image(camera, pred.depth)
-        image = np.concatenate([color, depth], axis=1)
-        name = "s{:07}_c{:03}.png".format(step, camera)
-        path = os.path.join(self._output_dir, name)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(path, image)
         self._index += 1

@@ -41,6 +41,7 @@ class Voxels(nn.Module):
         output = output.transpose(1, 2)
         output = output.reshape(-1, 4)
         output = output + self.bias
+        assert not output.isnan().any()
         return output
 
     def save(self, path: str):

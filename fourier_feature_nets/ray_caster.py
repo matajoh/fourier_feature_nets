@@ -18,7 +18,6 @@ except ImportError:
     Run = None
     print("Unable to import AzureML, running as local experiment")
 
-from .patches_dataset import PatchesDataset
 from .ray_dataset import RayDataset
 from .ray_sampler import RaySampler, RaySamples
 from .utils import (
@@ -34,7 +33,7 @@ LogEntry = NamedTuple("LogEntry", [("step", int), ("timestamp", float),
                                    ("train_psnr", float), ("val_psnr", float)])
 
 
-class Raycaster(nn.Module):
+class Raycaster:
     """Implementation of a volumetric raycaster."""
 
     def __init__(self, model: nn.Module):
@@ -71,6 +70,9 @@ class Raycaster(nn.Module):
         color = torch.sigmoid(color)
         opacity = F.softplus(opacity)
 
+        assert not color.isnan().any()
+        assert not opacity.isnan().any()
+
         opacity = opacity.squeeze(-1)
         weights = calculate_blend_weights(ray_samples.t_values, opacity)
 
@@ -81,8 +83,15 @@ class Raycaster(nn.Module):
         output_alpha = weights.sum(-1)
 
         if include_depth:
-            output_depth = (weights * ray_samples.t_values[..., :-1]).sum(-1)
-            output_depth = torch.nan_to_num(output_depth / output_alpha)
+            cutoff = weights.argmax(-1)
+            cutoff[output_alpha < .1] = -1
+            static_depth = ray_samples.t_values[torch.arange(num_rays),
+                                                cutoff]
+
+            weighted_depth = (weights * ray_samples.t_values[..., :-1]).sum(-1)
+            weighted_depth = weighted_depth / output_alpha
+            output_depth = torch.where(output_alpha < 0.1,
+                                       static_depth, weighted_depth)
         else:
             output_depth = None
 
@@ -242,8 +251,6 @@ class Raycaster(nn.Module):
             decay_steps: int,
             weight_decay: float,
             visualizers: List[Visualizer],
-            patch_dataset: PatchesDataset = None,
-            reg_batch_portion=0.5,
             disable_aml=False) -> List[LogEntry]:
         """Fits the volumetric model using the raycaster.
 
@@ -295,22 +302,10 @@ class Raycaster(nn.Module):
             return self.render_activations(sampler, camera, batch_size,
                                            train_dataset.color_space)
 
-        if patch_dataset is not None and reg_batch_portion > 0:
-            patch_dataset.mode = RayDataset.Mode.Patch
-            target = int(reg_batch_portion * batch_size)
-            batch_patches = target // patch_dataset.rays_per_patch
-            batch_size = batch_size - (batch_patches * patch_dataset.rays_per_patch)
-
         while step <= num_steps:
             num_rays = len(train_dataset)
             index = np.arange(num_rays)
             np.random.shuffle(index)
-
-            if patch_dataset is not None:
-                num_patches = len(patch_dataset)
-                patch_index = np.arange(num_patches)
-                np.random.shuffle(patch_index)
-                patch_start = 0
 
             for start in range(0, num_rays, batch_size):
                 if step > num_steps:
@@ -322,20 +317,10 @@ class Raycaster(nn.Module):
                 batch = index[start:end].tolist()
 
                 optim.zero_grad()
-                image_loss = self._loss(step, train_dataset, batch)
-
-                if patch_dataset is not None:
-                    patch_end = min(patch_start + batch_patches, num_patches)
-                    patch_batch = patch_index[patch_start:patch_end].tolist()
-                    reg_loss = self._loss(step, patch_dataset, patch_batch)
-                    patch_start = patch_end
-                    if patch_start == num_patches:
-                        patch_start = 0
-                else:
-                    reg_loss = 0
-
-                loss = image_loss + reg_loss
+                loss = self._loss(step, train_dataset, batch)
                 loss.backward()
+                torch.nn.utils.clip_grad_value_(self.model.parameters(), 0.1)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 0.1)
                 optim.step()
 
                 if step < 10 or step % report_interval == 0:
@@ -358,16 +343,12 @@ class Raycaster(nn.Module):
                           "{:2f} s/step".format(time_per_step),
                           "psnr_train: {:2f}".format(train_psnr),
                           "val_psnr: {:2f}".format(val_psnr),
-                          "image_loss: {:4f}".format(image_loss),
-                          "reg_loss: {:4f}".format(reg_loss),
                           "lr: {:.2e}".format(current_lr),
                           "eta:", eta)
 
                     if run:
                         run.log("psnr_train", train_psnr)
                         run.log("psnr_val", val_psnr)
-                        run.log("image_loss", image_loss)
-                        run.log("reg_loss", reg_loss)
                         run.log("time_per_step", time_per_step)
 
                     if step % report_interval == 0:
