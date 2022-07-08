@@ -23,7 +23,8 @@ from .visualizers import (
     ActivationVisualizer,
     ComparisonVisualizer,
     EvaluationVisualizer,
-    OrbitVideoVisualizer
+    OrbitVideoVisualizer,
+    PatchVisualizer
 )
 from .voxels_model import Voxels
 
@@ -56,4 +57,5 @@ __all__ = ["__version__",
            "ActivationVisualizer",
            "ComparisonVisualizer",
            "EvaluationVisualizer",
-           "OrbitVideoVisualizer"]
+           "OrbitVideoVisualizer",
+           "PatchVisualizer"]

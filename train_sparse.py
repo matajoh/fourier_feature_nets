@@ -55,6 +55,8 @@ def _parse_args():
     parser.add_argument("--forward-dir", default="z-",
                         choices=list(VECTORS.keys()),
                         help="The direction that is 'forward'")
+    parser.add_argument("--reg", action="store_true")
+    parser.add_argument("--compare", action="store_true")
     parser.add_argument("--num-patch-cameras", type=int, default=100,
                         help="Number of cameras to use for patch sampling")
     parser.add_argument("--num-patches", type=int, default=256,
@@ -87,18 +89,22 @@ def _main():
                                     anneal_start=args.anneal_start,
                                     num_anneal_steps=args.num_anneal_steps)
 
-    patch_cameras = ffn.hemisphere(VECTORS[args.up_dir],
-                                   VECTORS[args.forward_dir],
-                                   100, dataset.cameras[0].fov_y_degrees,
-                                   dataset.cameras[0].resolution, 4)
-    patches = ffn.PatchesDataset("patches", dataset.sampler.bounds,
-                                 patch_cameras, args.num_samples,
-                                 args.num_patches, args.patch_size, True,
-                                 color_space=args.color_space,
-                                 anneal_start=args.anneal_start,
-                                 num_anneal_steps=args.num_anneal_steps)
-
-    patches.to_scenepic().save_as_html("patches.html")
+    visualizers = []
+    if args.reg:
+        patch_cameras = ffn.hemisphere(VECTORS[args.up_dir],
+                                       VECTORS[args.forward_dir],
+                                       100, dataset.cameras[0].fov_y_degrees,
+                                       dataset.cameras[0].resolution, 4)
+        patch_dataset = ffn.PatchesDataset("patches", dataset.sampler.bounds,
+                                           patch_cameras, args.num_samples,
+                                           args.num_patches, args.patch_size, True,
+                                           color_space=args.color_space,
+                                           anneal_start=args.anneal_start,
+                                           num_anneal_steps=args.num_anneal_steps)
+        visualizers.append(ffn.PatchVisualizer(args.results_dir, patch_dataset,
+                                               args.image_interval))
+    else:
+        patch_dataset = None
 
     assert len(dataset) > 2 * args.num_images
 
@@ -108,20 +114,32 @@ def _main():
     index = list(range(2 * args.num_images))
 
     train_dataset = dataset.subset(index[:args.num_images],
-                                   args.num_samples, True)
+                                   args.num_samples, True, "train")
     val_dataset = dataset.subset(index[args.num_images:],
-                                 args.num_samples, False)
+                                 args.num_samples, False, "val")
 
     if train_dataset is None:
         return 1
 
-    visualizers = [ffn.ComparisonVisualizer(
-        args.results_dir,
-        args.num_steps,
-        args.num_frames,
-        train_dataset,
-        val_dataset
-    )]
+    if args.compare:
+        visualizers.append(ffn.ComparisonVisualizer(
+            args.results_dir,
+            args.num_steps,
+            args.num_frames,
+            train_dataset,
+            val_dataset
+        ))
+    else:
+        visualizers.append(ffn.EvaluationVisualizer(
+            args.results_dir,
+            train_dataset,
+            args.image_interval
+        ))
+        visualizers.append(ffn.EvaluationVisualizer(
+            args.results_dir,
+            val_dataset,
+            args.image_interval
+        ))
 
     if args.mode == "dilate":
         train_dataset.mode = ffn.RayDataset.Mode.Dilate
@@ -135,7 +153,7 @@ def _main():
     log = raycaster.fit(train_dataset, val_dataset, args.batch_size,
                         args.learning_rate, args.num_steps, 0,
                         args.report_interval, args.decay_rate, args.decay_steps,
-                        0.0, visualizers)
+                        0.0, visualizers, patch_dataset)
 
     model.save(os.path.join(args.results_dir, "voxels.pt"))
     with open(os.path.join(args.results_dir, "log.txt"), "w") as file:

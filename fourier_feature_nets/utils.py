@@ -381,7 +381,7 @@ def hemisphere(up_dir: np.ndarray, forward_dir: np.ndarray, num_cameras: int,
         distance = np.linalg.norm(position)
         azimuth = math.atan2(direction[0], direction[2])
         altitude = math.asin(direction[1])
-        pos = sp.Transforms.translate([0, 0, distance])
+        pos = sp.Transforms.translate([0, 0, -distance])
         elevate = sp.Transforms.rotation_matrix_from_axis_angle(right_dir,
                                                                 altitude)
         rotate = sp.Transforms.rotation_matrix_from_axis_angle(up_dir,

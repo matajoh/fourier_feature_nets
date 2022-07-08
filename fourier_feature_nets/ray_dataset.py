@@ -87,7 +87,8 @@ class RayDataset(ABC):
         """Set of pixel indices in an image to sample."""
 
     @abstractmethod
-    def loss(self, rays: RaySamples, render: RenderResult) -> torch.Tensor:
+    def loss(self, step: int, rays: RaySamples,
+             render: RenderResult) -> torch.Tensor:
         """Compute the dataset loss for the prediction.
 
         Args:
@@ -210,7 +211,7 @@ class RayDataset(ABC):
                 choice = unchosen[distances.argmax()]
                 samples.add(choice)
 
-        return self.subset(list(samples), num_samples, stratified)
+        return self.subset(list(samples), num_samples, stratified, self.label)
 
     @abstractmethod
     def __len__(self) -> int:
@@ -219,7 +220,8 @@ class RayDataset(ABC):
     @abstractmethod
     def subset(self, cameras: List[int],
                num_samples: int,
-               stratified: bool) -> "RayDataset":
+               stratified: bool,
+               label: str) -> "RayDataset":
         """Returns a subset of this dataset (by camera).
 
         Args:

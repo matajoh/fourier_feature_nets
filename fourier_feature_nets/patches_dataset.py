@@ -22,7 +22,9 @@ class PatchesDataset(Dataset, RayDataset):
                  num_patches: int, patch_size: int,
                  stratified=False, opacity_model: nn.Module = None,
                  batch_size=4096, color_space="RGB",
-                 anneal_start=0.2, num_anneal_steps=0):
+                 anneal_start=0.2, num_anneal_steps=0,
+                 depth_weight_start=400.0, depth_weight_end=10,
+                 num_depth_steps=512):
         """Constructor.
 
         Args:
@@ -50,6 +52,12 @@ class PatchesDataset(Dataset, RayDataset):
                                               sampling to the full range of
                                               volume intersection. Defaults
                                               to 0.
+            depth_weight_start (float, optional): Starting depth reg weight.
+                                                  Defaults to 400.
+            depth_weight_end (float, optional): Ending depth reg weight.
+                                                Defaults to 10.
+            num_depth_steps (int, optional): Number of steps over which to
+                                             anneal the depth weight.
         """
         self._label = label
         self._num_samples = num_samples
@@ -61,6 +69,10 @@ class PatchesDataset(Dataset, RayDataset):
                                    opacity_model, batch_size, anneal_start,
                                    num_anneal_steps)
 
+        self._depth_weight_start = depth_weight_start
+        self._depth_weight_end = depth_weight_end
+        self._num_depth_steps = num_depth_steps
+
         grid_rows = int(np.sqrt(num_patches))
         grid_cols = num_patches // grid_rows
         if grid_rows * grid_cols < num_patches:
@@ -68,12 +80,15 @@ class PatchesDataset(Dataset, RayDataset):
 
         self.patches_per_camera = num_patches
         self.patch_size = patch_size
+        self.rays_per_patch = patch_size * patch_size
 
-        self.sparse_rays_per_camera = 4 * num_patches
+        self.sparse_rays_per_camera = num_patches
 
         patches_index = []
+        self.patches_ranges = []
         sparse_index = []
         bar = ETABar("Indexing", max=len(cameras))
+        patch_start = 0
         for i, camera in enumerate(cameras):
             bar.next()
 
@@ -83,10 +98,7 @@ class PatchesDataset(Dataset, RayDataset):
                 for c in range(patch_size):
                     patch_points.append(r * resolution.width + c)
 
-            sparse_points = [
-                patch_points[0], patch_points[patch_size-1],
-                patch_points[-patch_size], patch_points[-1]
-            ]
+            sparse_points = [(patch_size * resolution.width + patch_size) // 2]
 
             patch_points = torch.LongTensor(patch_points)
             sparse_points = torch.LongTensor(sparse_points)
@@ -111,9 +123,19 @@ class PatchesDataset(Dataset, RayDataset):
             patches = []
             for r, c in zip(y[index], x[index]):
                 patch_offset = r * resolution.width + c
-                patches.append(patch_points + offset + patch_offset)
-                sparse_index.append(sparse_points + offset + patch_offset)
+                points = patch_points + offset + patch_offset
+                valid_points = self._sampler.to_valid(points.tolist())
+                if len(valid_points) < len(points):
+                    continue
 
+                patches.append(points)
+                sparse_index.append(sparse_points + offset + patch_offset)
+                if len(patches) == num_patches:
+                    break
+
+            patch_end = patch_start + len(patches)
+            self.patches_ranges.append((patch_start, patch_end))
+            patch_start = patch_end
             patches = torch.stack(patches)
             patches_index.append(patches)
 
@@ -164,8 +186,7 @@ class PatchesDataset(Dataset, RayDataset):
     def rays_for_camera(self, camera: int) -> RaySamples:
         """Returns ray samples for the specified camera."""
         if self.mode == RayDataset.Mode.Patch:
-            start = camera * self.patches_per_camera
-            end = start + self.patches_per_camera
+            start, end = self.patches_ranges[camera]
         elif self.mode == RayDataset.Mode.Sparse:
             start = camera * self.sparse_rays_per_camera
             end = start + self.sparse_rays_per_camera
@@ -187,7 +208,7 @@ class PatchesDataset(Dataset, RayDataset):
         """Set of pixel indices in an image to sample."""
         self._subsample_index = index
 
-    def loss(self, rays: RaySamples, render: RenderResult) -> torch.Tensor:
+    def loss(self, step: int, _: RaySamples, render: RenderResult) -> torch.Tensor:
         """Compute the dataset loss for the prediction.
 
         Args:
@@ -197,7 +218,23 @@ class PatchesDataset(Dataset, RayDataset):
         Returns:
             torch.Tensor: a scalar loss tensor
         """
-        raise NotImplementedError("wip")
+        depth = render.depth.reshape(-1, self.patch_size, self.patch_size)
+        d00 = depth[:, :-1, :-1]
+        d01 = depth[:, :-1, 1:]
+        d10 = depth[:, 1:, :-1]
+
+        loss = torch.square(d00 - d01) + torch.square(d00 - d10)
+
+        if self._num_depth_steps:
+            progress = np.clip(step / self._num_depth_steps, 0, 1)
+            weight = self._depth_weight_start * (1 - progress)
+            weight = weight + progress * self._depth_weight_end
+        else:
+            weight = self._depth_weight_end
+
+        loss = loss.mean() * weight
+        assert not loss.isnan()
+        return loss
 
     def get_rays(self,
                  idx: Union[List[int], torch.Tensor],
@@ -216,7 +253,7 @@ class PatchesDataset(Dataset, RayDataset):
 
         if self.mode == RayDataset.Mode.Patch:
             idx = self.patches_index[idx]
-            idx = torch.cat(idx).tolist()
+            idx = idx.reshape(-1).tolist()
         elif self.mode == RayDataset.Mode.Sparse:
             idx = self.sparse_index[idx].tolist()
 
@@ -227,7 +264,6 @@ class PatchesDataset(Dataset, RayDataset):
             idx = [i for i in idx
                    if i % self._sampler.rays_per_camera in self.subsample_index]
 
-        idx = self._sampler.to_valid(idx)
         return self._sampler.sample(idx, step)
 
     def render(self, rays: RaySamples) -> RenderResult:
@@ -256,8 +292,7 @@ class PatchesDataset(Dataset, RayDataset):
         """
         camera_start = camera * self._sampler.rays_per_camera
         if self.mode == RayDataset.Mode.Patch:
-            start = camera * self.patches_per_camera
-            end = start + self.patches_per_camera
+            start, end = self.patches_ranges[camera]
             idx = self.patches_index[start:end]
             idx = idx.reshape(-1).tolist()
         elif self.mode == RayDataset.Mode.Sparse:
@@ -270,7 +305,6 @@ class PatchesDataset(Dataset, RayDataset):
         else:
             raise NotImplementedError("Unsupported sampling mode")
 
-        idx = self._sampler.to_valid(idx)
         idx = [i - camera_start for i in idx]
         return idx
 
@@ -292,7 +326,7 @@ class PatchesDataset(Dataset, RayDataset):
     def __len__(self) -> int:
         """The number of rays in the dataset."""
         if self.mode == RayDataset.Mode.Patch:
-            return len(self.patches_index) * len(self.patches_index[0])
+            return len(self.patches_index)
 
         if self.mode == RayDataset.Mode.Sparse:
             return len(self.sparse_index)
@@ -349,10 +383,13 @@ class PatchesDataset(Dataset, RayDataset):
         bar = ETABar("Plotting cameras", max=self.num_cameras)
         thumb_res = resolution.scale_to_height(200)
 
-        patch_colors = np.arange(self.patches_per_camera)
+        sparse_colors = patch_colors = np.arange(self.patches_per_camera)
         patch_colors = patch_colors.repeat(self.patch_size * self.patch_size)
         patch_colors = cmap(patch_colors / (self.patches_per_camera - 1))
         patch_colors = patch_colors[..., :3]
+        patch_colors = (patch_colors * 255).astype(np.uint8)
+        sparse_colors = cmap(sparse_colors / (self.patches_per_camera - 1))
+        sparse_colors = sparse_colors[..., :3].astype(np.float32)
         for i, camera, color in zip(idx, cameras, camera_colors):
             bar.next()
             width, height = camera.resolution
@@ -402,37 +439,20 @@ class PatchesDataset(Dataset, RayDataset):
             self.mode = RayDataset.Mode.Full
             cam_start = cam * self._sampler.rays_per_camera
             index = [cam_start + i for i in index]
-            entry = self.get_rays(index)
+            samples = self.get_rays(index)
+            colors = sparse_colors[:len(index)]
+            colors = colors[:, np.newaxis]
+            colors = np.repeat(colors, self.num_samples, 1)
+            colors = colors.reshape(-1, 3)
 
-            colors = entry.colors.unsqueeze(1)
-            colors = colors.expand(-1, self.num_samples, -1)
-            positions = entry.samples.positions.numpy().reshape(-1, 3)
-            colors = colors.numpy().copy().reshape(-1, 3)
-
-            if entry.alphas is not None:
-                alphas = entry.alphas.unsqueeze(1)
-                alphas = alphas.expand(-1, self.num_samples)
-                alphas = alphas.reshape(-1)
-                empty = (alphas < 0.1).numpy()
-            else:
-                empty = np.zeros_like(colors[..., 0])
-
-            not_empty = np.logical_not(empty)
+            positions = samples.positions.numpy().reshape(-1, 3)
 
             samples = scene.create_mesh(layer_id="samples")
             samples.add_sphere(sp.Colors.White, transform=sp.Transforms.scale(0.01))
-            samples.enable_instancing(positions=positions[not_empty],
-                                      colors=colors[not_empty])
+            samples.enable_instancing(positions=positions,
+                                      colors=colors)
 
             frame = canvas.create_frame()
-
-            if empty.any():
-                empty_samples = scene.create_mesh(layer_id="empty samples")
-                empty_samples.add_sphere(sp.Colors.Black,
-                                         transform=sp.Transforms.scale(0.01))
-                empty_samples.enable_instancing(positions=positions[empty],
-                                                colors=colors[empty])
-                frame.add_mesh(empty_samples)
 
             frame.camera = camera.to_scenepic()
             frame.add_mesh(bounds)

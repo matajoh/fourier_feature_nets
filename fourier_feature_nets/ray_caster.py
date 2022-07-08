@@ -18,6 +18,7 @@ except ImportError:
     Run = None
     print("Unable to import AzureML, running as local experiment")
 
+from .patches_dataset import PatchesDataset
 from .ray_dataset import RayDataset
 from .ray_sampler import RaySampler, RaySamples
 from .utils import (
@@ -80,21 +81,20 @@ class Raycaster(nn.Module):
         output_alpha = weights.sum(-1)
 
         if include_depth:
-            cutoff = weights.argmax(-1)
-            cutoff[output_alpha < .1] = -1
-            output_depth = ray_samples.t_values[torch.arange(num_rays),
-                                                cutoff]
+            output_depth = (weights * ray_samples.t_values[..., :-1]).sum(-1)
+            output_depth = torch.nan_to_num(output_depth / output_alpha)
         else:
             output_depth = None
 
         return RenderResult(output_color, output_alpha, output_depth)
 
-    def _loss(self, dataset: RayDataset, rays: RaySamples) -> torch.Tensor:
+    def _loss(self, step: int, dataset: RayDataset, batch: List[int]) -> torch.Tensor:
         device = next(self.model.parameters()).device
+        rays = dataset.get_rays(batch, step)
         rays = rays.to(device)
 
         render = self.render(rays, True)
-        return dataset.loss(rays, render)
+        return dataset.loss(step, rays, render)
 
     def batched_render(self, samples: RaySamples,
                        batch_size: int, include_depth: bool) -> RenderResult:
@@ -224,8 +224,7 @@ class Raycaster(nn.Module):
                     break
 
                 batch = val_index[start:start + batch_size]
-                batch_rays = dataset.get_rays(batch, step)
-                loss.append(self._loss(dataset, batch_rays).item())
+                loss.append(self._loss(step, dataset, batch).item())
 
         self.model.train()
         loss = np.mean(loss)
@@ -243,6 +242,8 @@ class Raycaster(nn.Module):
             decay_steps: int,
             weight_decay: float,
             visualizers: List[Visualizer],
+            patch_dataset: PatchesDataset = None,
+            reg_batch_portion=0.5,
             disable_aml=False) -> List[LogEntry]:
         """Fits the volumetric model using the raycaster.
 
@@ -294,10 +295,22 @@ class Raycaster(nn.Module):
             return self.render_activations(sampler, camera, batch_size,
                                            train_dataset.color_space)
 
+        if patch_dataset is not None and reg_batch_portion > 0:
+            patch_dataset.mode = RayDataset.Mode.Patch
+            target = int(reg_batch_portion * batch_size)
+            batch_patches = target // patch_dataset.rays_per_patch
+            batch_size = batch_size - (batch_patches * patch_dataset.rays_per_patch)
+
         while step <= num_steps:
             num_rays = len(train_dataset)
             index = np.arange(num_rays)
             np.random.shuffle(index)
+
+            if patch_dataset is not None:
+                num_patches = len(patch_dataset)
+                patch_index = np.arange(num_patches)
+                np.random.shuffle(patch_index)
+                patch_start = 0
 
             for start in range(0, num_rays, batch_size):
                 if step > num_steps:
@@ -307,9 +320,21 @@ class Raycaster(nn.Module):
                                      decay_rate, decay_steps)
                 end = min(start + batch_size, num_rays)
                 batch = index[start:end].tolist()
-                batch_rays = train_dataset.get_rays(batch, step)
+
                 optim.zero_grad()
-                loss = self._loss(train_dataset, batch_rays)
+                image_loss = self._loss(step, train_dataset, batch)
+
+                if patch_dataset is not None:
+                    patch_end = min(patch_start + batch_patches, num_patches)
+                    patch_batch = patch_index[patch_start:patch_end].tolist()
+                    reg_loss = self._loss(step, patch_dataset, patch_batch)
+                    patch_start = patch_end
+                    if patch_start == num_patches:
+                        patch_start = 0
+                else:
+                    reg_loss = 0
+
+                loss = image_loss + reg_loss
                 loss.backward()
                 optim.step()
 
@@ -333,12 +358,16 @@ class Raycaster(nn.Module):
                           "{:2f} s/step".format(time_per_step),
                           "psnr_train: {:2f}".format(train_psnr),
                           "val_psnr: {:2f}".format(val_psnr),
+                          "image_loss: {:4f}".format(image_loss),
+                          "reg_loss: {:4f}".format(reg_loss),
                           "lr: {:.2e}".format(current_lr),
                           "eta:", eta)
 
                     if run:
                         run.log("psnr_train", train_psnr)
                         run.log("psnr_val", val_psnr)
+                        run.log("image_loss", image_loss)
+                        run.log("reg_loss", reg_loss)
                         run.log("time_per_step", time_per_step)
 
                     if step % report_interval == 0:

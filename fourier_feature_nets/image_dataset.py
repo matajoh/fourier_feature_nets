@@ -201,7 +201,7 @@ class ImageDataset(Dataset, RayDataset):
     def to_valid(self, idx: List[int]) -> List[int]:
         return self.sampler.to_valid(idx)
 
-    def loss(self, rays: RaySamples, render: RenderResult) -> torch.Tensor:
+    def loss(self, _: int, rays: RaySamples, render: RenderResult) -> torch.Tensor:
         actual = self.render(rays)
         actual = actual.to(render.device)
 
@@ -280,8 +280,9 @@ class ImageDataset(Dataset, RayDataset):
 
     def subset(self, cameras: List[int],
                num_samples: int,
-               stratified: bool) -> "ImageDataset":
-        return ImageDataset(self.label,
+               stratified: bool,
+               label: str) -> "ImageDataset":
+        return ImageDataset(label,
                             self.images[cameras],
                             self.sampler.bounds,
                             [self.sampler.cameras[i] for i in cameras],
@@ -482,15 +483,15 @@ class ImageDataset(Dataset, RayDataset):
             self.mode = RayDataset.Mode.Full
             cam_start = cam * self.sampler.rays_per_camera
             index = [cam_start + i for i in index]
-            entry = self.get_rays(index)
+            samples = self.get_rays(index)
+            render = self.render(samples)
 
-            colors = entry.colors.unsqueeze(1)
-            colors = colors.expand(-1, self.num_samples, -1)
-            positions = entry.samples.positions.numpy().reshape(-1, 3)
+            colors = render.color.expand(-1, self.num_samples, -1)
+            positions = samples.positions.numpy().reshape(-1, 3)
             colors = colors.numpy().copy().reshape(-1, 3)
 
-            if entry.alphas is not None:
-                alphas = entry.alphas.unsqueeze(1)
+            if render.alpha is not None:
+                alphas = render.alpha.unsqueeze(1)
                 alphas = alphas.expand(-1, self.num_samples)
                 alphas = alphas.reshape(-1)
                 empty = (alphas < 0.1).numpy()

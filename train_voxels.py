@@ -86,6 +86,11 @@ def _main():
     else:
         visualizers.append(ffn.EvaluationVisualizer(
             args.results_dir,
+            train_dataset,
+            args.image_interval
+        ))
+        visualizers.append(ffn.EvaluationVisualizer(
+            args.results_dir,
             val_dataset,
             args.image_interval
         ))
