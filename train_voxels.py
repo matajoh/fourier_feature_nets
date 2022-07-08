@@ -100,8 +100,7 @@ def _main():
     scale = 2 / train_dataset.sampler.bounds[0, 0]
     model = ffn.Voxels(args.side, scale)
 
-    raycaster = ffn.Raycaster(model)
-    raycaster.to(args.device)
+    raycaster = ffn.Raycaster(model.to(args.device))
 
     log = raycaster.fit(train_dataset, val_dataset, args.batch_size,
                         args.learning_rate, args.num_steps, 0,

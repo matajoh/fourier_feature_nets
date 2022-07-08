@@ -79,7 +79,8 @@ class EvaluationVisualizer(Visualizer):
         predicted = np.clip(pred.color, 0, 1)
         predicted_image = self._dataset.to_image(camera, predicted)
 
-        actual_image = self._dataset.to_image(camera, act.color)
+        color = act.color * act.alpha[..., np.newaxis]
+        actual_image = self._dataset.to_image(camera, color)
 
         depth = np.clip(pred.depth, 0, self._max_depth) / self._max_depth
         depth_image = self._dataset.to_image(camera, depth)

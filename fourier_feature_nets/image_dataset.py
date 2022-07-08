@@ -549,7 +549,7 @@ class ImageDataset(Dataset, RayDataset):
             samples = self.get_rays(index)
             render = self.render(samples)
 
-            colors = render.color.expand(-1, self.num_samples, -1)
+            colors = render.color.unsqueeze(1).expand(-1, self.num_samples, -1)
             positions = samples.positions.numpy().reshape(-1, 3)
             colors = colors.numpy().copy().reshape(-1, 3)
 

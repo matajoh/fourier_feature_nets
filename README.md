@@ -231,7 +231,7 @@ It will produce the frames of the following video:
 
 https://user-images.githubusercontent.com/6894931/142744837-382e13b1-d1cf-4305-870a-b64763c73e54.mp4
 
-Another way to visualize what the model has learned is toproduce a
+Another way to visualize what the model has learned is to produce a
 voxelization of the model. This is different from the voxel-based volume
 rendering, in which multiple voxels contribute to a single sample. Rather, it
 is a sparse octree containing voxels at the places the model has determined are

@@ -2,7 +2,7 @@
 
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 
-from fourier_feature_nets import load_model, RayDataset
+from fourier_feature_nets import load_model, ImageDataset, RayDataset
 
 
 def _parse_args():
@@ -44,10 +44,10 @@ def _main():
     else:
         model = None
 
-    dataset = RayDataset.load(args.data_path, args.split,
-                              args.num_samples, True,
-                              args.stratified, model,
-                              args.batch_size, sparse_size=args.resolution)
+    dataset = ImageDataset.load(args.data_path, args.split,
+                                args.num_samples, True,
+                                args.stratified, model,
+                                args.batch_size, sparse_size=args.resolution)
     if dataset is None:
         return 1
 

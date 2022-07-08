@@ -16,14 +16,20 @@ from .ray_caster import Raycaster
 from .ray_dataset import RayDataset
 from .ray_sampler import RaySampler, RaySamples
 from .signal_dataset import SignalDataset
-from .utils import ETABar, hemisphere, interpolate_bilinear, load_model, orbit
+from .utils import (
+    ETABar,
+    exponential_lr_decay,
+    hemisphere,
+    interpolate_bilinear,
+    load_model,
+    orbit
+)
 from .version import __version__
 from .visualizers import (
     ActivationVisualizer,
     ComparisonVisualizer,
     EvaluationVisualizer,
-    OrbitVideoVisualizer,
-    PatchVisualizer
+    OrbitVideoVisualizer
 )
 from .voxels_model import Voxels
 
@@ -39,6 +45,7 @@ __all__ = ["__version__",
            "GaussianFourierMLP",
            "ImageDataset",
            "Voxels",
+           "exponential_lr_decay",
            "interpolate_bilinear",
            "hemisphere",
            "load_model",
