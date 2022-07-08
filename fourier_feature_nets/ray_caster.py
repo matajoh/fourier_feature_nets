@@ -85,13 +85,8 @@ class Raycaster:
         if include_depth:
             cutoff = weights.argmax(-1)
             cutoff[output_alpha < .1] = -1
-            static_depth = ray_samples.t_values[torch.arange(num_rays),
+            output_depth = ray_samples.t_values[torch.arange(num_rays),
                                                 cutoff]
-
-            weighted_depth = (weights * ray_samples.t_values[..., :-1]).sum(-1)
-            weighted_depth = weighted_depth / output_alpha
-            output_depth = torch.where(output_alpha < 0.1,
-                                       static_depth, weighted_depth)
         else:
             output_depth = None
 
@@ -107,6 +102,16 @@ class Raycaster:
 
     def batched_render(self, samples: RaySamples,
                        batch_size: int, include_depth: bool) -> RenderResult:
+        """Render a set of rays in batches.
+
+        Args:
+            samples (RaySamples): The ray samples to render
+            batch_size (int): Number of rays per batch
+            include_depth (bool): whether to include depth in the render
+
+        Returns:
+            RenderResult: result of rendering all rays
+        """
         self.model.eval()
         colors = []
         alphas = []

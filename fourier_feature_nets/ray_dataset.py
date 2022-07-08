@@ -15,6 +15,8 @@ from .utils import RenderResult
 
 
 class RayDataset(ABC):
+    """Prototype for a dataset containing rays."""
+
     class Mode(Enum):
         """The sampling mode of the dataset."""
         Full = 0
@@ -35,12 +37,12 @@ class RayDataset(ABC):
     @property
     @abstractmethod
     def num_cameras(self) -> int:
-        """Number of cameras in the dataset"""
+        """Number of cameras in the dataset."""
 
     @property
     @abstractmethod
     def num_samples(self) -> int:
-        """Number of samples per ray in the dataset"""
+        """Number of samples per ray in the dataset."""
 
     @property
     @abstractmethod

@@ -1,3 +1,5 @@
+"""Module defining various visualizers that can be used during training."""
+
 from abc import ABC, abstractmethod
 import os
 from typing import Callable
@@ -15,6 +17,7 @@ ActivationRender = Callable[[RaySampler, int], np.ndarray]
 
 
 class Visualizer(ABC):
+    """A visualizer can hook into the training process to produce artifacts."""
     @abstractmethod
     def visualize(self, step: int, render: ImageRender,
                   act_render: ActivationRender):
@@ -28,8 +31,19 @@ class Visualizer(ABC):
 
 
 class EvaluationVisualizer(Visualizer):
+    """Produces image grids showing GT, prediction, depth, and error."""
+
     def __init__(self, results_dir: str, dataset: ImageDataset, interval: int,
                  max_depth=10):
+        """Constructor.
+
+        Args:
+            results_dir (str): the base results directory.
+            dataset (ImageDataset): the dataset to use as reference.
+            interval (int): the number of steps between images.
+            max_depth (int, optional): Value used to clip the depth.
+                                       Defaults to 10.
+        """
         path = os.path.join(results_dir, dataset.label)
         os.makedirs(path, exist_ok=True)
         self._output_dir = path
@@ -40,6 +54,13 @@ class EvaluationVisualizer(Visualizer):
 
     def visualize(self, step: int, render: ImageRender,
                   _: ActivationRender):
+        """Create a visualization using the provided render functions.
+
+        Args:
+            step (int): Step in the optimization
+            render (ImageRender): Render function in image space
+            act_render (ActivationRender): Render function for the activations
+        """
         if step % self._interval != 0:
             return
 
@@ -81,9 +102,21 @@ class EvaluationVisualizer(Visualizer):
 
 
 class OrbitVideoVisualizer(Visualizer):
+    """Produces a video where the camera orbits the render volume."""
+
     def __init__(self, results_dir: str, num_steps: int,
                  resolution: Resolution, num_frames: int,
                  num_samples: int, color_space: str):
+        """Constructor.
+
+        Args:
+            results_dir (str): the base results directory
+            num_steps (int): the number of steps in the training sequence
+            resolution (Resolution): the resolution of the video
+            num_frames (int): number of frames in the video
+            num_samples (int): number of samples per ray
+            color_space (str): the color space (RGB or YCrCb)
+        """
         video_dir = os.path.join(results_dir, "video")
         os.makedirs(video_dir, exist_ok=True)
         self._output_dir = video_dir
@@ -97,6 +130,13 @@ class OrbitVideoVisualizer(Visualizer):
 
     def visualize(self, step: int, render: ImageRender,
                   _: ActivationRender):
+        """Create a visualization using the provided render functions.
+
+        Args:
+            step (int): Step in the optimization
+            render (ImageRender): Render function in image space
+            act_render (ActivationRender): Render function for the activations
+        """
         if step % self._interval != 0:
             return
 
@@ -112,9 +152,21 @@ class OrbitVideoVisualizer(Visualizer):
 
 
 class ActivationVisualizer(Visualizer):
+    """Creates a video of the layer activations during training."""
+
     def __init__(self, results_dir: str, num_steps: int,
                  resolution: Resolution, num_frames: int,
                  num_samples: int, color_space: str):
+        """Constructor.
+
+        Args:
+            results_dir (str): the base results directory
+            num_steps (int): the number of steps in the training sequence
+            resolution (Resolution): the resolution of the video
+            num_frames (int): number of frames in the video
+            num_samples (int): number of samples per ray
+            color_space (str): the color space (RGB or YCrCb)
+        """
         act_dir = os.path.join(results_dir, "activations")
         os.makedirs(act_dir, exist_ok=True)
         self._output_dir = act_dir
@@ -128,6 +180,13 @@ class ActivationVisualizer(Visualizer):
 
     def visualize(self, step: int, _: ImageRender,
                   act_render: ActivationRender):
+        """Create a visualization using the provided render functions.
+
+        Args:
+            step (int): Step in the optimization
+            render (ImageRender): Render function in image space
+            act_render (ActivationRender): Render function for the activations
+        """
         if step % self._interval != 0:
             return
 
@@ -140,9 +199,20 @@ class ActivationVisualizer(Visualizer):
 
 
 class ComparisonVisualizer(Visualizer):
+    """This visualizer compares training and validation renders."""
+
     def __init__(self, results_dir: str, num_steps: int,
                  num_frames: int,
                  train: ImageDataset, val: ImageDataset):
+        """Constructor.
+
+        Args:
+            results_dir (str): the base results directory
+            num_steps (int): the number of steps in the training sequence
+            num_frames (int): number of frames in the video
+            train (ImageDataset): training data
+            val (ImageDataset): validation data
+        """
         compare_dir = os.path.join(results_dir, "compare")
         os.makedirs(compare_dir, exist_ok=True)
         assert train.num_cameras == val.num_cameras
@@ -154,6 +224,13 @@ class ComparisonVisualizer(Visualizer):
 
     def visualize(self, step: int, render: ImageRender,
                   _: ActivationRender):
+        """Create a visualization using the provided render functions.
+
+        Args:
+            step (int): Step in the optimization
+            render (ImageRender): Render function in image space
+            act_render (ActivationRender): Render function for the activations
+        """
         if step % self._interval != 0:
             return
 

@@ -8,9 +8,9 @@ from .fourier_feature_models import (
     MLP,
     PositionalFourierMLP
 )
+from .image_dataset import ImageDataset
 from .nerf_model import NeRF
 from .octree import OcTree
-from .image_dataset import ImageDataset
 from .pixel_dataset import PixelDataset
 from .ray_caster import Raycaster
 from .ray_dataset import RayDataset

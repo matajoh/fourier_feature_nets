@@ -12,8 +12,8 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 
 from .camera_info import CameraInfo, Resolution
-from .ray_sampler import RaySampler, RaySamples
 from .ray_dataset import RayDataset
+from .ray_sampler import RaySampler, RaySamples
 from .utils import download_asset, ETABar, RenderResult
 
 
@@ -157,10 +157,12 @@ class ImageDataset(Dataset, RayDataset):
 
     @property
     def color_space(self) -> str:
+        """Color space used by the dataset."""
         return self._color_space
 
     @property
     def mode(self) -> RayDataset.Mode:
+        """Sampling mode of the dataset."""
         return self._mode
 
     @mode.setter
@@ -172,6 +174,7 @@ class ImageDataset(Dataset, RayDataset):
 
     @property
     def subsample_index(self) -> Set[int]:
+        """Set of pixel indices in an image to sample."""
         return self._subsample_index
 
     @subsample_index.setter
@@ -180,28 +183,54 @@ class ImageDataset(Dataset, RayDataset):
 
     @property
     def images(self) -> List[np.ndarray]:
+        """Dataset images."""
         return self._images
 
     @property
     def label(self) -> str:
+        """A label for the dataset."""
         return self._label
 
     @property
     def num_cameras(self) -> bool:
+        """Number of cameras in the dataset."""
         return self.sampler.num_cameras
 
     @property
     def num_samples(self) -> int:
+        """Number of samples per ray in the dataset."""
         return self.sampler.num_samples
 
     @property
     def cameras(self) -> List[CameraInfo]:
+        """Camera information."""
         return self.sampler.cameras
 
     def to_valid(self, idx: List[int]) -> List[int]:
+        """Filters the list of ray indices to include only valid rays.
+
+        Description:
+            In this context, a "valid" ray is one which intersects the bounding
+            volume.
+
+        Args:
+            idx (List[int]): An index of rays in the dataset.
+
+        Returns:
+            List[int]: a filtered list of valid rays
+        """
         return self.sampler.to_valid(idx)
 
     def loss(self, _: int, rays: RaySamples, render: RenderResult) -> torch.Tensor:
+        """Compute the dataset loss for the prediction.
+
+        Args:
+            actual (RaySamples): The rays to render
+            predicted (RenderResult): The ray rendering result
+
+        Returns:
+            torch.Tensor: a scalar loss tensor
+        """
         actual = self.render(rays)
         actual = actual.to(render.device)
 
@@ -213,6 +242,14 @@ class ImageDataset(Dataset, RayDataset):
         return color_loss
 
     def render(self, samples: RaySamples) -> RenderResult:
+        """Returns a (ground truth) render of the rays.
+
+        Args:
+            rays (RaySamples): the rays to render
+
+        Returns:
+            RenderResult: the ground truth render
+        """
         color = self.colors[samples.rays]
         if self.alphas is None or self.mode == RayDataset.Mode.Dilate:
             alpha = None
@@ -224,6 +261,18 @@ class ImageDataset(Dataset, RayDataset):
         return RenderResult(color, alpha, None)
 
     def index_for_camera(self, camera: int) -> List[int]:
+        """Returns a pixel index for the camera.
+
+        Description:
+            This method will take into account special patterns from sampling,
+            such as sparsity, center cropping, or dilation.
+
+        Args:
+            camera (int): the camera index
+
+        Returns:
+            List[int]: index into the rays for this camera
+        """
         camera_start = camera * self.sampler.rays_per_camera
         if self.mode == RayDataset.Mode.Center:
             start = camera * self.crop_rays_per_camera
@@ -247,6 +296,7 @@ class ImageDataset(Dataset, RayDataset):
         return idx
 
     def rays_for_camera(self, camera: int) -> RaySamples:
+        """Returns ray samples for the specified camera."""
         if self.mode == RayDataset.Mode.Center:
             start = camera * self.crop_rays_per_camera
             end = start + self.crop_rays_per_camera
@@ -264,6 +314,7 @@ class ImageDataset(Dataset, RayDataset):
         return self.get_rays(list(range(start, end)), None)
 
     def __len__(self) -> int:
+        """The number of rays in the dataset."""
         if self.mode == RayDataset.Mode.Center:
             return len(self.crop_index)
 
@@ -282,6 +333,18 @@ class ImageDataset(Dataset, RayDataset):
                num_samples: int,
                stratified: bool,
                label: str) -> "ImageDataset":
+        """Returns a subset of this dataset (by camera).
+
+        Args:
+            cameras (List[int]): List of camera indices
+            num_samples (int): Number of samples per ray.
+            resolution (int): Ray sampling resolution
+            stratified (bool): Whether to use stratified sampling.
+                               Defaults to False.
+
+        Returns:
+            RayDataset: New dataset with the subset of cameras
+        """
         return ImageDataset(label,
                             self.images[cameras],
                             self.sampler.bounds,

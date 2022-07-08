@@ -340,6 +340,14 @@ def shuffle_positions(positions: np.ndarray, random=True) -> List[int]:
 
 
 def fibonacci_hemisphere(num_samples: int) -> np.ndarray:
+    """Computes points on a unit hemisphere using the Fibonacci method.
+
+    Args:
+        num_samples (int): Number of samples from the hemisphere
+
+    Returns:
+        np.ndarray: a (N,3) tensor of positions on the unit hemisphere
+    """
     points = []
     phi = math.pi * (3. - math.sqrt(5.))  # golden angle in radians
 
@@ -362,6 +370,21 @@ def fibonacci_hemisphere(num_samples: int) -> np.ndarray:
 def hemisphere(up_dir: np.ndarray, forward_dir: np.ndarray, num_cameras: int,
                fov_y_degrees: float, resolution: Resolution,
                distance: float, pos_noise=0.1) -> List[CameraInfo]:
+    """Generates a random set of evenly placed cameras in a hemisphere.
+
+    Args:
+        up_dir (np.ndarray): unit vector indicating the "up" direction
+        forward_dir (np.ndarray): unit vector indicating the "forward" direction
+        num_cameras (int): number of cameras to sample
+        fov_y_degrees (float): the y-axis field of view (in degrees)
+        resolution (Resolution): the resolution of the cameras
+        distance (float): the mean distance of cameras to the origin
+        pos_noise (float, optional): the positional noise for cameras.
+                                     Defaults to 0.1.
+
+    Returns:
+        List[CameraInfo]: the sampled cameras
+    """
     directions = fibonacci_hemisphere(num_cameras)
     right_dir = np.cross(up_dir, forward_dir)
 
@@ -483,8 +506,15 @@ def load_model(path: str) -> torch.nn.Module:
 class RenderResult(NamedTuple("RenderResult", [("color", torch.Tensor),
                                                ("alpha", torch.Tensor),
                                                ("depth", torch.Tensor)])):
+    """The result of a rendering operation.
+
+    Description:
+        Contains color, alpha, and (optionally) depth values which have been
+        rendered on a per-ray basis.
+    """
     @property
     def device(self) -> torch.device:
+        """The device on which the tensors are stored."""
         return self.color.device
 
     def to(self, *args) -> "RenderResult":

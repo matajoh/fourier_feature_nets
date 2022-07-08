@@ -5,7 +5,6 @@ import json
 import os
 
 import fourier_feature_nets as ffn
-import numpy as np
 import torch
 
 
