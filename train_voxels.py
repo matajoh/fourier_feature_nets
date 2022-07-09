@@ -46,7 +46,7 @@ def _parse_args():
                         help="Pytorch compute device")
     parser.add_argument("--anneal-start", type=float, default=0.2,
                         help="Starting value for the sample space annealing.")
-    parser.add_argument("--num-anneal-steps", type=int, default=0,
+    parser.add_argument("--num-anneal-steps", type=int, default=2000,
                         help=("Steps over which to anneal sampling to the full"
                               "range of volume intersection."))
 

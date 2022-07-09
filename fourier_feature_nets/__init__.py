@@ -17,6 +17,7 @@ from .ray_dataset import RayDataset
 from .ray_sampler import RaySampler, RaySamples
 from .signal_dataset import SignalDataset
 from .utils import (
+    calculate_blend_weights,
     ETABar,
     exponential_lr_decay,
     hemisphere,
@@ -45,6 +46,7 @@ __all__ = ["__version__",
            "GaussianFourierMLP",
            "ImageDataset",
            "Voxels",
+           "calculate_blend_weights",
            "exponential_lr_decay",
            "interpolate_bilinear",
            "hemisphere",

@@ -187,7 +187,7 @@ def camera_to_world(scene: sp.Scene, voxels: ffn.OcTree,
 
 
 if __name__ == "__main__":
-    dataset = ffn.RayDataset.load("antinous_400.npz", "train", 64, True, False)
+    dataset = ffn.ImageDataset.load("antinous_400.npz", "train", 64, True, False)
     voxels = ffn.OcTree.load("antinous_octree_10.npz")
     scene = sp.Scene()
     camera_to_world(scene, voxels, dataset.cameras[6], dataset.images[6], 800)

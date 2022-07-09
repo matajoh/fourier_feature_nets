@@ -107,14 +107,14 @@ dataset = ffn.PixelDataset.create(path_to_image_file, color_space="RGB",
 ## 3D Datasets
 
 This is where the library becomes a bit picky about input data. The
-[`RayDataset`](nerf/ray_dataset.py) supports a set format for data,
+[`ImageDataset`](nerf/image_dataset.py) supports a set format for data,
 and we provide several datasets in this format to play
 with. These datasets are not stored in the repo, but the library will
 automatically download them to the `data` folder when you first requests them
 which you can do like so:
 
 ```python
-dataset = ffn.RayDataset.load("antinous_400.npz", split="train", num_samples=64)
+dataset = ffn.ImageDataset.load("antinous_400.npz", split="train", num_samples=64)
 ```
 
 We recommend you use one of the following (all datasets are provided in 400 and 800 versions):

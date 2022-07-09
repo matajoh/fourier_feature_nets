@@ -27,7 +27,6 @@ def _main():
     experiment = Experiment(workspace=ws, name=args.name)
     env_path = os.path.join("azureml", "aml_env.yml")
     environment = Environment.from_conda_specification("training", env_path)
-    environment.environment_variables["AZUREML_COMPUTE_USE_COMMON_RUNTIME"] = "false"
     config = ScriptRunConfig(source_directory=".",
                              script=args.script_path,
                              arguments=args.script_args.split(),
