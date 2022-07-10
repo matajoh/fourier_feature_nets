@@ -9,13 +9,14 @@ import torch.nn.functional as F
 
 def rendering_equation(voxels: ffn.OcTree, ray_samples: ffn.RaySamples,
                        camera: ffn.CameraInfo, image: np.ndarray,
-                       model: ffn.NeRF, resolution=800) -> sp.Scene:
+                       model: ffn.NeRF) -> sp.Scene:
     scene = sp.Scene()
-    canvas = scene.create_canvas_3d(width=resolution, height=3 * resolution / 4)
-    canvas.shading = sp.Shading(bg_color=sp.Colors.White)
+    resolution = 600
+    main = scene.create_canvas_3d(width=resolution, height=3 * resolution / 4)
+    main.shading = sp.Shading(bg_color=sp.Colors.White)
 
     graph = scene.create_graph(width=resolution, height=resolution / 4,
-                               text_size=24)
+                               text_size=32)
 
     num_samples = len(ray_samples.positions[0])
 
@@ -24,7 +25,7 @@ def rendering_equation(voxels: ffn.OcTree, ray_samples: ffn.RaySamples,
     leaf_colors = voxels.leaf_data()
     depths = np.unique(leaf_depths)
     cubes = []
-    for depth in depths:
+    for depth in depths[-1:]:
         mesh = scene.create_mesh(layer_id="model")
         transform = sp.Transforms.scale(pow(2., 1-depth) * voxels.scale)
         mesh.add_cube(sp.Colors.White, transform=transform, add_wireframe=True, fill_triangles=False)
@@ -62,9 +63,9 @@ def rendering_equation(voxels: ffn.OcTree, ray_samples: ffn.RaySamples,
     max_dist = torch.full_like(deltas[:, :1], 1e10)
     deltas = torch.cat([deltas, max_dist], dim=-1)
     trans = torch.exp(-(opacity * deltas).cumsum(-1))
-    
-    graph.add_sparkline("σ", opacity[0].numpy(), sp.Colors.Red, 2)
-    graph.add_sparkline("T", trans[0].numpy(), sp.Colors.Blue, 2)
+
+    graph.add_sparkline("σ", opacity[0].numpy(), sp.Colors.Red, 3)
+    graph.add_sparkline("T", trans[0].numpy(), sp.Colors.Blue, 3)
 
     camera_start = [0, 0, 1.5]
     lookat = [0, 0, 0]
@@ -101,12 +102,15 @@ def rendering_equation(voxels: ffn.OcTree, ray_samples: ffn.RaySamples,
         colors = colors[index]
         sample_mesh.enable_instancing(positions.numpy(), colors=colors.numpy())
 
-        frame = canvas.create_frame(camera=view_cam)
+        frame = main.create_frame(camera=view_cam)
         _add_meshes(frame)
         frame.add_mesh(ray_mesh)
         frame.add_mesh(sample_mesh)
 
-    scene.link_canvas_events(canvas, graph)
+    scene.grid("600px", "600px 200px", "600px")
+    scene.place(main.canvas_id, "1", "1")
+    scene.place(graph.canvas_id, "2", "1")
+    scene.link_canvas_events(main, graph)
     return scene
 
 
