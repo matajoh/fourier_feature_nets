@@ -14,7 +14,8 @@ from .utils import calculate_blend_weights, ETABar, linspace
 
 class RaySamples(NamedTuple("RaySamples", [("positions", torch.Tensor),
                                            ("view_directions", torch.Tensor),
-                                           ("t_values", torch.Tensor)])):
+                                           ("t_values", torch.Tensor),
+                                           ("rays", torch.Tensor)])):
     """Points samples from rays.
 
     Description:
@@ -29,6 +30,7 @@ class RaySamples(NamedTuple("RaySamples", [("positions", torch.Tensor),
             positions: the 3D positions
             view_directions: the direction from each position back to the camera
             t_values: the t_values corresponding to the positions
+            rays: the ray indices
 
         Each tensor is grouped by ray, so the first two dimensions will be
         (num_rays,num_samples).
@@ -394,5 +396,8 @@ class RaySampler:
         directions = directions.repeat(1, self.num_samples, 1)
         positions = starts + t_values.unsqueeze(-1) * directions
 
-        ray_samples = RaySamples(positions, directions, t_values)
+        if not isinstance(idx, torch.Tensor):
+            idx = torch.LongTensor(idx)
+
+        ray_samples = RaySamples(positions, directions, t_values, idx)
         return ray_samples

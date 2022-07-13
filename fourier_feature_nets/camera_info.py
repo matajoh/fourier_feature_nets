@@ -34,6 +34,11 @@ class Resolution(NamedTuple("Resolution", [("width", int), ("height", int)])):
         size = min(self.width, self.height)
         return Resolution(size, size)
 
+    @property
+    def ratio(self) -> float:
+        """Aspect ratio."""
+        return self.width / self.height
+
 
 class CameraInfo(NamedTuple("CameraInfo", [("name", str),
                                            ("resolution", Resolution),
@@ -78,6 +83,13 @@ class CameraInfo(NamedTuple("CameraInfo", [("name", str),
         points = (projection @ h_coords.T).T
         points = points[:, :2] / points[:, 2:3]
         return points
+
+    @property
+    def fov_y_degrees(self) -> float:
+        """Y-axis field of view (in degrees) for the camera."""
+        fov_y = (0.5 * self.resolution.width) / self.intrinsics[1, 1]
+        fov_y = 2 * np.arctan(fov_y)
+        return fov_y * 180 / np.pi
 
     @property
     def position(self) -> np.ndarray:

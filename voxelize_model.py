@@ -45,8 +45,8 @@ def _main():
     else:
         opacity_model = None
 
-    dataset = ffn.RayDataset.load(args.data_path, "train", 400, 128, False,
-                                  opacity_model)
+    dataset = ffn.ImageDataset.load(args.data_path, "train", 400, 128, False,
+                                    opacity_model)
     if dataset is None:
         return 1
 
@@ -58,7 +58,6 @@ def _main():
     sampler = dataset.sampler
     model = model.to(args.device)
     raycaster = ffn.Raycaster(model)
-    raycaster.to(args.device)
     num_rays = len(sampler)
     colors = []
     positions = []
@@ -67,14 +66,14 @@ def _main():
         for start in range(0, num_rays, args.batch_size):
             end = min(start + args.batch_size, num_rays)
             index = list(range(start, end))
-            rays = sampler[list(range(start, end))]
-            color, alpha, depth = raycaster.render(rays.to(args.device), True)
-            valid = (alpha > args.alpha_threshold).cpu()
-            colors.append(color[valid].cpu().numpy())
-            starts = sampler.starts[index]
-            dirs = sampler.directions[index]
-            position = starts + dirs * depth.cpu().unsqueeze(-1)
-            positions.append(position[valid].cpu().numpy())
+            rays = sampler.sample(list(range(start, end)), None)
+            color, alpha, depth = raycaster.render(rays.to(args.device), True).numpy()
+            valid = (alpha > args.alpha_threshold)
+            colors.append(color[valid])
+            starts = sampler.starts[index].cpu().numpy()
+            dirs = sampler.directions[index].cpu().numpy()
+            position = starts + dirs * depth[..., np.newaxis]
+            positions.append(position[valid])
             bar.next(end - start)
 
     bar.finish()

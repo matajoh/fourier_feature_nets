@@ -8,15 +8,30 @@ from .fourier_feature_models import (
     MLP,
     PositionalFourierMLP
 )
+from .image_dataset import ImageDataset
 from .nerf_model import NeRF
 from .octree import OcTree
 from .pixel_dataset import PixelDataset
 from .ray_caster import Raycaster
-from .ray_dataset import RayData, RayDataset
+from .ray_dataset import RayDataset
 from .ray_sampler import RaySampler, RaySamples
 from .signal_dataset import SignalDataset
-from .utils import ETABar, interpolate_bilinear, load_model, orbit
+from .utils import (
+    calculate_blend_weights,
+    ETABar,
+    exponential_lr_decay,
+    hemisphere,
+    interpolate_bilinear,
+    load_model,
+    orbit
+)
 from .version import __version__
+from .visualizers import (
+    ActivationVisualizer,
+    ComparisonVisualizer,
+    EvaluationVisualizer,
+    OrbitVideoVisualizer
+)
 from .voxels_model import Voxels
 
 __all__ = ["__version__",
@@ -29,8 +44,12 @@ __all__ = ["__version__",
            "FourierFeatureMLP",
            "PositionalFourierMLP",
            "GaussianFourierMLP",
+           "ImageDataset",
            "Voxels",
+           "calculate_blend_weights",
+           "exponential_lr_decay",
            "interpolate_bilinear",
+           "hemisphere",
            "load_model",
            "orbit",
            "OcTree",
@@ -38,8 +57,12 @@ __all__ = ["__version__",
            "Raycaster",
            "RaySampler",
            "RaySamples",
-           "RayData",
            "RayDataset",
            "Resolution",
            "SignalDataset",
-           "Triangulation"]
+           "Triangulation",
+           "ActivationVisualizer",
+           "ComparisonVisualizer",
+           "EvaluationVisualizer",
+           "OrbitVideoVisualizer",
+           "PatchVisualizer"]

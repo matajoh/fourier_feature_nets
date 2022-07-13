@@ -5,7 +5,6 @@ import json
 import os
 
 import fourier_feature_nets as ffn
-import numpy as np
 import torch
 
 
@@ -47,7 +46,7 @@ def _parse_args():
                         help="Pytorch compute device")
     parser.add_argument("--anneal-start", type=float, default=0.2,
                         help="Starting value for the sample space annealing.")
-    parser.add_argument("--num-anneal-steps", type=int, default=0,
+    parser.add_argument("--num-anneal-steps", type=int, default=2000,
                         help=("Steps over which to anneal sampling to the full"
                               "range of volume intersection."))
 
@@ -60,28 +59,40 @@ def _main():
     torch.manual_seed(args.seed)
 
     include_alpha = args.mode == "rgba"
-    train_dataset = ffn.RayDataset.load(args.data_path, "train",
+    train_dataset = ffn.ImageDataset.load(args.data_path, "train",
+                                          args.num_samples, include_alpha,
+                                          True, color_space=args.color_space,
+                                          anneal_start=args.anneal_start,
+                                          num_anneal_steps=args.num_anneal_steps)
+    val_dataset = ffn.ImageDataset.load(args.data_path, "val",
                                         args.num_samples, include_alpha,
-                                        True, color_space=args.color_space,
-                                        anneal_start=args.anneal_start,
-                                        num_anneal_steps=args.num_anneal_steps)
-    val_dataset = ffn.RayDataset.load(args.data_path, "val",
-                                      args.num_samples, include_alpha,
-                                      False, color_space=args.color_space)
-
-    if args.make_video:
-        cameras = ffn.orbit(np.array([0, 1, 0]), np.array([0, 0, -1]),
-                            args.num_frames, 40,
-                            train_dataset.resolution.square(), 4)
-        bounds = np.eye(4, dtype=np.float32) * 2
-        video_sampler = ffn.RaySampler(bounds, cameras, args.num_samples)
-        image_interval = args.num_steps // args.num_frames
-    else:
-        video_sampler = None
-        image_interval = args.image_interval
+                                        False, color_space=args.color_space)
 
     if train_dataset is None:
         return 1
+
+    visualizers = []
+    if args.make_video:
+        resolution = train_dataset.cameras[0].resolution
+        visualizers.append(ffn.OrbitVideoVisualizer(
+            args.results_dir,
+            args.num_steps,
+            resolution,
+            args.num_frames,
+            args.num_samples,
+            args.color_space
+        ))
+    else:
+        visualizers.append(ffn.EvaluationVisualizer(
+            args.results_dir,
+            train_dataset,
+            args.image_interval
+        ))
+        visualizers.append(ffn.EvaluationVisualizer(
+            args.results_dir,
+            val_dataset,
+            args.image_interval
+        ))
 
     if args.mode == "dilate":
         train_dataset.mode = ffn.RayDataset.Mode.Dilate
@@ -89,23 +100,23 @@ def _main():
     scale = 2 / train_dataset.sampler.bounds[0, 0]
     model = ffn.Voxels(args.side, scale)
 
-    raycaster = ffn.Raycaster(model)
-    raycaster.to(args.device)
+    raycaster = ffn.Raycaster(model.to(args.device))
 
-    log = raycaster.fit(train_dataset, val_dataset, args.results_dir,
-                        args.batch_size, args.learning_rate,
-                        args.num_steps, image_interval, 0,
+    log = raycaster.fit(train_dataset, val_dataset, args.batch_size,
+                        args.learning_rate, args.num_steps, 0,
                         args.report_interval, args.decay_rate, args.decay_steps,
-                        0.0, video_sampler)
+                        0.0, visualizers)
 
     model.save(os.path.join(args.results_dir, "voxels.pt"))
     with open(os.path.join(args.results_dir, "log.txt"), "w") as file:
         json.dump(vars(args), file)
         file.write("\n\n")
         file.write("\t".join(["step", "timestamp", "psnr_train", "psnr_val"]))
-        file.write("\t")
-        for line in log:
-            file.write("\t".join([str(val) for val in line]) + "\n")
+        file.write("\n")
+        for entry in log:
+            file.write("\t".join([str(val) for val in [
+                entry.step, entry.timestamp, entry.train_psnr, entry.val_psnr
+            ]]) + "\n")
 
     sp_path = os.path.join(args.results_dir, "voxels.html")
     raycaster.to_scenepic(val_dataset).save_as_html(sp_path)

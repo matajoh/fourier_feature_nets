@@ -9,7 +9,7 @@ import numpy as np
 from progress.bar import ChargingBar
 import trimesh
 
-from .utils import ETABar, download_asset, interpolate_bilinear
+from .utils import download_asset, ETABar, interpolate_bilinear
 
 
 Vector = NamedTuple("Vector", [("x", float), ("y", float), ("z", float)])
@@ -468,7 +468,7 @@ def _trace_ray_path(scale: float, node_index: np.ndarray,
             while _node_contains(current, point):
                 # ...very paranoid about this failure case.
                 # we NEED to leave the current leaf or the algorithm
-                # will never return. 
+                # will never return.
                 # TOD This would be safer/better/faster with integers.
                 t += 1e-5
                 point = _cast_ray(ray, t)

@@ -504,7 +504,7 @@ class VolumeRaycastingAnimation:
 
 
 if __name__ == "__main__":
-    dataset = ffn.RayDataset.load("antinous_800.npz", "train", 64, True, False)
+    dataset = ffn.ImageDataset.load("antinous_800.npz", "train", 64, True, False)
     voxels = ffn.OcTree.load("antinous_octree_8.npz")
     anim = VolumeRaycastingAnimation(dataset, voxels, width=1280, height=720)
     print("Writing scenepic to file...")

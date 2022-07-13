@@ -107,14 +107,14 @@ dataset = ffn.PixelDataset.create(path_to_image_file, color_space="RGB",
 ## 3D Datasets
 
 This is where the library becomes a bit picky about input data. The
-[`RayDataset`](nerf/ray_dataset.py) supports a set format for data,
+[`ImageDataset`](nerf/image_dataset.py) supports a set format for data,
 and we provide several datasets in this format to play
 with. These datasets are not stored in the repo, but the library will
 automatically download them to the `data` folder when you first requests them
 which you can do like so:
 
 ```python
-dataset = ffn.RayDataset.load("antinous_400.npz", split="train", num_samples=64)
+dataset = ffn.ImageDataset.load("antinous_400.npz", split="train", num_samples=64)
 ```
 
 We recommend you use one of the following (all datasets are provided in 400 and 800 versions):
@@ -231,7 +231,7 @@ It will produce the frames of the following video:
 
 https://user-images.githubusercontent.com/6894931/142744837-382e13b1-d1cf-4305-870a-b64763c73e54.mp4
 
-Another way to visualize what the model has learned is toproduce a
+Another way to visualize what the model has learned is to produce a
 voxelization of the model. This is different from the voxel-based volume
 rendering, in which multiple voxels contribute to a single sample. Rather, it
 is a sparse octree containing voxels at the places the model has determined are

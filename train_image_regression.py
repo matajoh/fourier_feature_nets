@@ -131,7 +131,14 @@ def _main():
         if step % args.report_interval == 0 or step == args.num_steps:
             with torch.no_grad():
                 model.eval()
-                output = torch.sigmoid(model(dataset.val_uv))
+                batch_rows = args.image_size // 4
+                output = []
+                for i in range(4):
+                    start = i * batch_rows
+                    end = start + batch_rows
+                    output.append(model(dataset.val_uv[start:end]))
+
+                output = torch.sigmoid(torch.cat(output))
                 psnr_val = dataset.psnr(output)
                 print("step", step, "val:", psnr_val, "lr:",
                       optim.param_groups[0]["lr"])
