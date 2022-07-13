@@ -67,7 +67,7 @@ def rendering_equation(voxels: ffn.OcTree, ray_samples: ffn.RaySamples,
     graph.add_sparkline("σ", opacity[0].numpy(), sp.Colors.Red, 3)
     graph.add_sparkline("T", trans[0].numpy(), sp.Colors.Blue, 3)
 
-    camera_start = [0, 0, 1.5]
+    camera_start = [-1.5, 0, 0]
     lookat = [0, 0, 0]
     fov = 70
 
@@ -84,10 +84,7 @@ def rendering_equation(voxels: ffn.OcTree, ray_samples: ffn.RaySamples,
         ray_mesh = scene.create_mesh()
         ray_mesh.add_thickline(sp.Colors.Black, start, end, 0.005, 0.005)
 
-        if i < num_samples / 2:
-            angle = (i * np.pi) / num_samples
-        else:
-            angle = ((num_samples - i) * np.pi) / num_samples
+        angle = (i * np.pi) / num_samples
 
         view_rot = sp.Transforms.rotation_about_y(angle)
         view_pos = view_rot[:3, :3] @ np.array(camera_start)
@@ -122,7 +119,7 @@ if __name__ == "__main__":
     row = 190
     col = 240
     camera = dataset.cameras[17]
-    index = 17 * dataset.sampler.rays_per_camera + 190 * 400 + 240
+    index = 17 * dataset.sampler.rays_per_camera + row * 400 + col
     rays = dataset.sampler.sample([index], None)
     scene = rendering_equation(voxels, rays, camera, image, model)
     scene.save_as_html("rendering_eq.html", title="Rendering Equation")
