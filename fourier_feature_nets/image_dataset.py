@@ -250,11 +250,12 @@ class ImageDataset(Dataset, RayDataset):
         Returns:
             RenderResult: the ground truth render
         """
-        color = self.colors[samples.rays]
+        rays = samples.rays.to(self.colors.device)
+        color = self.colors[rays]
         if self.alphas is None or self.mode == RayDataset.Mode.Dilate:
             alpha = None
         else:
-            alpha = self.alphas[samples.rays]
+            alpha = self.alphas[rays]
             color = torch.where(alpha.unsqueeze(1) > 0, color,
                                 torch.zeros_like(color))
 

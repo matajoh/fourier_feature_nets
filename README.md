@@ -25,9 +25,8 @@ the requirements for the repository, ideally in a virtual environment. We
 recommend using a version of Python >= 3.7. As this code heavily relies upon
 PyTorch, you should install the correct version for your platform. The guide
 [here](https://pytorch.org/get-started/locally/)
-is very useful and I suggest you follow it closely. You may also find
-[this site](https://www.lfd.uci.edu/~gohlke/pythonlibs/) helpful if you 
-are working on Windows. Once that is done, you can run the following:
+is very useful and I suggest you follow it closely. Once that is done,
+you can run the following:
 
 ```
 pip install wheel

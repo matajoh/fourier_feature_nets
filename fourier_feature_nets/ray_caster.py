@@ -33,7 +33,7 @@ LogEntry = NamedTuple("LogEntry", [("step", int), ("timestamp", float),
                                    ("train_psnr", float), ("val_psnr", float)])
 
 
-class Raycaster:
+class Raycaster(nn.Module):
     """Implementation of a volumetric raycaster."""
 
     def __init__(self, model: nn.Module):

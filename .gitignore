@@ -141,3 +141,4 @@ models
 *.tsv
 figures/*.png
 figures/*.npz
+scenepic.min.js
